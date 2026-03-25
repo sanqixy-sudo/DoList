@@ -47,4 +47,5 @@ npm-debug.log*
 
 # Local helper scripts
 一键提交推送.bat
+git-sync.ps1
 启动软件测试.bat
