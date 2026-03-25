@@ -44,3 +44,7 @@ npm-debug.log*
 
 # TypeScript
 *.tsbuildinfo
+
+# Local helper scripts
+一键提交推送.bat
+启动软件测试.bat
