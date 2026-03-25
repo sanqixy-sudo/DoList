@@ -81,6 +81,7 @@ const electronAPI: ElectronAPI = {
     closeWindow: () => ipcRenderer.invoke(IPC_CHANNELS.APP_WINDOW_CLOSE),
     minimizeToTray: () => ipcRenderer.invoke(IPC_CHANNELS.APP_MINIMIZE_TO_TRAY),
     quit: () => ipcRenderer.invoke(IPC_CHANNELS.APP_QUIT),
+    openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.APP_OPEN_EXTERNAL, url),
     onQuickAdd: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(IPC_CHANNELS.APP_QUICK_ADD, listener);

@@ -74,6 +74,7 @@ export const IPC_CHANNELS = {
   APP_WINDOW_CLOSE: 'app:windowClose',
   APP_MINIMIZE_TO_TRAY: 'app:minimizeToTray',
   APP_QUIT: 'app:quit',
+  APP_OPEN_EXTERNAL: 'app:openExternal',
   APP_QUICK_ADD: 'app:quickAdd',
 } as const;
 
@@ -148,6 +149,7 @@ export interface ElectronAPI {
     closeWindow: () => Promise<void>;
     minimizeToTray: () => Promise<void>;
     quit: () => Promise<void>;
+    openExternal: (url: string) => Promise<void>;
     onQuickAdd: (callback: () => void) => () => void;
   };
 }

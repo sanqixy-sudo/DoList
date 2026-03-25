@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, globalShortcut } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme, globalShortcut, shell } from 'electron';
 import path from 'path';
 import { initDatabase, closeDatabase } from './db/client';
 import { registerTaskHandlers } from './ipc/tasks';
@@ -163,6 +163,10 @@ if (!gotTheLock) {
 
     ipcMain.handle(IPC_CHANNELS.APP_QUIT, () => {
       app.quit();
+    });
+
+    ipcMain.handle(IPC_CHANNELS.APP_OPEN_EXTERNAL, async (_, url: string) => {
+      await shell.openExternal(url);
     });
 
     // Auto launch settings
