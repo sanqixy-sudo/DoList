@@ -1,7 +1,7 @@
 {
   "name": "dolist",
   "productName": "DoList",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "DoList - \u7b80\u6d01\u9ad8\u6548\u7684\u4efb\u52a1\u7ba1\u7406\u5e94\u7528",
   "main": "dist/main/index.js",
   "scripts": {
