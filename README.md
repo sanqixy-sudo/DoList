@@ -9,10 +9,10 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.2-111827?style=flat-square" alt="Version" />
-  <img src="https://img.shields.io/badge/license-MIT-059669?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/github/v/release/sanqixy-sudo/DoList?style=flat-square&color=111827" alt="Version" />
+  <img src="https://img.shields.io/github/license/sanqixy-sudo/DoList?style=flat-square&color=059669" alt="License" />
   <img src="https://img.shields.io/badge/platform-Windows-2563eb?style=flat-square" alt="Platform" />
-  <img src="https://img.shields.io/badge/Electron-React-TypeScript-f59e0b?style=flat-square" alt="Tech Stack" />
+  <img src="https://img.shields.io/badge/tech%20stack-Electron%2C%20React%2C%20TypeScript-f59e0b?style=flat-square" alt="Tech Stack" />
 </p>
 
 <p align="center">
