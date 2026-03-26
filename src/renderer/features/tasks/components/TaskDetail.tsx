@@ -47,6 +47,15 @@ interface TaskDetailProps {
   mode?: TaskDetailMode;
 }
 
+function formatTaskMetaDate(dateString: string | null): string | null {
+  if (!dateString) return null;
+
+  const date = new Date(dateString);
+  if (Number.isNaN(date.getTime())) return null;
+
+  return format(date, 'yyyy年M月d日 HH:mm', { locale: zhCN });
+}
+
 export function TaskDetail({ mode = 'inline' }: TaskDetailProps) {
   const { tasks, updateTask, deleteTask, setTask } = useTaskStore();
   const { lists, projectGroups } = useListStore();
@@ -126,6 +135,11 @@ export function TaskDetail({ mode = 'inline' }: TaskDetailProps) {
   if (!task || !isDetailPanelOpen) return null;
 
   const currentList = lists.find((list) => list.id === task.listId) ?? null;
+  const createdAtText = formatTaskMetaDate(task.createdAt);
+  const updatedAtText = formatTaskMetaDate(task.updatedAt);
+  const startDateText = formatTaskMetaDate(task.startDate);
+  const dueDateText = formatTaskMetaDate(task.dueDate);
+  const completedAtText = formatTaskMetaDate(task.completedAt);
 
   const updateCurrentTask = async (data: Parameters<typeof updateTask>[1]) => {
     const updated = await updateTask(task.id, data);
@@ -477,6 +491,44 @@ export function TaskDetail({ mode = 'inline' }: TaskDetailProps) {
                   placeholder="添加备注..."
                   className="min-h-[100px] w-full resize-none rounded-md border bg-transparent p-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 />
+              </div>
+
+              <Separator />
+
+              <div>
+                <label className="mb-2 block text-sm font-medium text-muted-foreground">时间信息</label>
+                <div className="space-y-2 rounded-xl border bg-muted/20 p-3">
+                  {createdAtText && (
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-muted-foreground">创建时间</span>
+                      <span className="font-medium">{createdAtText}</span>
+                    </div>
+                  )}
+                  {startDateText && (
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-muted-foreground">开始时间</span>
+                      <span>{startDateText}</span>
+                    </div>
+                  )}
+                  {dueDateText && (
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-muted-foreground">截止时间</span>
+                      <span>{dueDateText}</span>
+                    </div>
+                  )}
+                  {completedAtText && (
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-muted-foreground">完成时间</span>
+                      <span>{completedAtText}</span>
+                    </div>
+                  )}
+                  {updatedAtText && (
+                    <div className="flex items-center justify-between gap-3 text-sm">
+                      <span className="text-muted-foreground">最后更新</span>
+                      <span>{updatedAtText}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <Separator />
