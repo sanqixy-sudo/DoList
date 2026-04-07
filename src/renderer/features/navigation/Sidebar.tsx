@@ -190,11 +190,11 @@ export function Sidebar({ className }: SidebarProps) {
           <Separator className="my-4" />
 
           <div>
-            <div className="mb-2 flex items-center justify-between">
+            <div className="mb-2 flex items-center justify-between group gap-1">
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-8 px-2"
+                className="h-8 px-2 flex-1 justify-start"
                 onClick={() => setIsProjectGroupsExpanded((open) => !open)}
               >
                 {isProjectGroupsExpanded ? (
@@ -204,7 +204,7 @@ export function Sidebar({ className }: SidebarProps) {
                 )}
                 <span className="text-sm font-medium">项目组</span>
               </Button>
-              <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => setIsCreatingGroup(true)}>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsCreatingGroup(true)}>
                 <Plus className="h-4 w-4" />
               </Button>
             </div>
@@ -389,7 +389,7 @@ export function Sidebar({ className }: SidebarProps) {
               <Button
                 variant="ghost"
                 size="sm"
-                className="h-8 px-2"
+                className="h-8 px-2 flex-1 justify-start"
                 onClick={() => setIsViewsExpanded((open) => !open)}
               >
                 {isViewsExpanded ? (
