@@ -1,13 +1,40 @@
+import { appendJournal, rollbackJournal, replayJournal, syncFile, type Statement } from './journal';
 import initSqlJs from 'sql.js';
 import path from 'path';
-import { app } from 'electron';
 import fs from 'fs';
+import type { SaveStatus } from '../../../types/ipc';
 import { prepareMigrationSql } from './utils/migration-logic';
 
 let db: any = null;
 let dbPath = '';
 let isDirty = false;
+let journalReady = false;
+let transaction: Statement[] | null = null;
+let writeLocked = false;
+export function lockDatabaseWrites(): () => void {
+  if (writeLocked) throw new Error('已有备份操作正在进行');
+  writeLocked = true;
+  return () => { writeLocked = false; };
+}
+export function getDatabaseDirectory() { return path.dirname(dbPath); }
+export async function initSnapshotDatabase(bytes: Uint8Array, directory: string) {
+  const SQL = await initSqlJs(); db = new SQL.Database(bytes); dbPath = path.join(directory, 'worker-snapshot.db');
+  db.run('PRAGMA foreign_keys = ON');
+}
 let saveTimeout: NodeJS.Timeout | null = null;
+let saveInterval: NodeJS.Timeout | null = null;
+let saveError: string | null = null;
+const saveListeners = new Set<(status: SaveStatus) => void>();
+export function getSaveStatus(): SaveStatus { return { pending: isDirty, error: saveError }; }
+export function onSaveStatus(listener: (status: SaveStatus) => void): () => void {
+  saveListeners.add(listener);
+  return () => { saveListeners.delete(listener); };
+}
+function publishSaveStatus() { saveListeners.forEach(listener => listener(getSaveStatus())); }
+export function flushDatabase(): void { saveDatabase(); }
+function saveInBackground(): void {
+  try { saveDatabase(); } catch { /* Status is published; dirty data remains available for retry. */ }
+}
 
 export function getDatabase(): any {
   if (!db) {
@@ -16,8 +43,7 @@ export function getDatabase(): any {
   return db;
 }
 
-export async function initDatabase(): Promise<void> {
-  const userDataPath = app.getPath('userData');
+export async function initDatabase(userDataPath: string): Promise<void> {
   dbPath = path.join(userDataPath, 'ticklike.db');
 
   if (!fs.existsSync(userDataPath)) {
@@ -35,22 +61,36 @@ export async function initDatabase(): Promise<void> {
 
   db.run('PRAGMA foreign_keys = ON;');
 
+  journalReady = false;
   runMigrations();
+  const initialSequence = dbGet('PRAGMA user_version').user_version;
+  const sequence = replayJournal(dbPath + '.journal', initialSequence, entry => {
+    db.run('BEGIN');
+    try {
+      for (const statement of entry.statements) db.run(statement.sql, statement.params);
+      db.run('PRAGMA user_version = ' + entry.sequence); db.run('COMMIT');
+    } catch (error) { db.run('ROLLBACK'); throw error; }
+  });
+  journalReady = true;
+  if (sequence !== initialSequence) scheduleSave();
 
-  setInterval(() => {
+  if (saveInterval) clearInterval(saveInterval);
+  saveInterval = setInterval(() => {
     if (isDirty) {
-      saveDatabase();
+      saveInBackground();
     }
   }, 60000);
 }
 
 function scheduleSave(): void {
   isDirty = true;
+  publishSaveStatus();
   if (saveTimeout) {
     clearTimeout(saveTimeout);
   }
   saveTimeout = setTimeout(() => {
-    saveDatabase();
+    saveTimeout = null;
+    saveInBackground();
   }, 1000);
 }
 
@@ -58,13 +98,21 @@ function saveDatabase(): void {
   if (!db || !isDirty) return;
 
   try {
-    const data = db.export();
+    const data = exportDatabaseSnapshot();
     const buffer = Buffer.from(data);
-    fs.writeFileSync(dbPath, buffer);
+    const temporaryPath = `${dbPath}.tmp`;
+    syncFile(temporaryPath, buffer);
+    fs.renameSync(temporaryPath, dbPath);
+    // sql.js export reopens its connection; re-enable FK enforcement.
+    db.run('PRAGMA foreign_keys = ON;');
     isDirty = false;
-    console.log('Database saved');
+    if (journalReady) { try { syncFile(dbPath + '.journal', ''); } catch { /* Snapshot sequence prevents replaying checkpointed entries. */ } }
+    saveError = null;
+    publishSaveStatus();
   } catch (error) {
-    console.error('Failed to save database:', error);
+    saveError = '数据尚未写入磁盘，请检查磁盘空间和文件权限后重试。';
+    publishSaveStatus();
+    throw error;
   }
 }
 
@@ -227,11 +275,28 @@ function runMigrations(): void {
         ON task_attachments(task_id, created_at DESC);
       `,
     },
+    {
+      name: '004_daily_plan',
+      sql: `ALTER TABLE tasks ADD COLUMN planned_date TEXT;
+            CREATE INDEX IF NOT EXISTS idx_tasks_planned ON tasks(planned_date);`,
+    },
+    {
+      name: '005_task_trash',
+      sql: `ALTER TABLE tasks ADD COLUMN deleted_at TEXT;
+            CREATE INDEX idx_tasks_deleted ON tasks(deleted_at);`,
+    },
   ];
 
+  let migrated = false;
   for (const migration of migrations) {
     if (hasAppliedMigration(migration.name)) continue;
 
+    if (fs.existsSync(dbPath)) {
+      const backup = `${dbPath}.before-${migration.name}.bak`;
+      if (!fs.existsSync(backup)) fs.copyFileSync(dbPath, backup);
+    }
+
+    migrated = true;
     applyMigration(
       migration.name,
       prepareMigrationSql(migration.name, migration.sql, {
@@ -240,8 +305,7 @@ function runMigrations(): void {
     );
   }
 
-  isDirty = true;
-  saveDatabase();
+  if (migrated) { isDirty = true; saveDatabase(); }
 }
 
 function hasAppliedMigration(name: string): boolean {
@@ -273,12 +337,14 @@ function columnExists(tableName: string, columnName: string): boolean {
 }
 
 export function closeDatabase(): void {
+  saveDatabase();
+  if (saveInterval) { clearInterval(saveInterval); saveInterval = null; }
   if (saveTimeout) {
     clearTimeout(saveTimeout);
+    saveTimeout = null;
   }
 
   if (db) {
-    isDirty = true;
     saveDatabase();
     db.close();
     db = null;
@@ -287,8 +353,10 @@ export function closeDatabase(): void {
 
 export function dbRun(sql: string, params: any[] = []): void {
   if (!db) throw new Error('Database not initialized');
+  if (writeLocked) throw new Error('备份处理中，请稍后重试修改');
+  if (!transaction) { dbTransaction(() => dbRun(sql, params)); return; }
   db.run(sql, params);
-  scheduleSave();
+  transaction.push({ sql, params });
 }
 
 export function dbGet(sql: string, params: any[] = []): any {
@@ -318,3 +386,65 @@ export function dbAll(sql: string, params: any[] = []): any[] {
   stmt.free();
   return results;
 }
+
+/** Bulk writes share one transaction and one fsync. */
+export function dbRunMany(sql: string, rows: (string | number | null)[][]): void {
+  if (!rows.length) return;
+  dbTransaction(() => {
+    const statement = db.prepare(sql);
+    try { for (const params of rows) { statement.run(params); transaction!.push({ sql, params }); } }
+    finally { statement.free(); }
+  });
+}
+
+export function dbTransaction(action: () => void): void {
+  if (writeLocked) throw new Error('备份处理中，请稍后重试修改');
+  if (transaction) throw new Error('不支持嵌套事务');
+  db.run('BEGIN'); transaction = [];
+  let journalOffset: number | null = null;
+  try {
+    action();
+    if (journalReady && transaction.length) {
+      const sequence = dbGet('PRAGMA user_version').user_version + 1;
+      if (sequence > 2147483647) throw new Error('事务序号达到上限');
+      db.run('PRAGMA user_version = ' + sequence);
+      journalOffset = appendJournal(dbPath + '.journal', sequence, transaction);
+    }
+    db.run('COMMIT');
+  } catch (error) {
+    db.run('ROLLBACK');
+    if (journalOffset !== null) rollbackJournal(dbPath + '.journal', journalOffset);
+    throw error;
+  } finally { transaction = null; }
+  scheduleSave();
+}
+
+export function exportDatabaseSnapshot(): Uint8Array {
+  try { return getDatabase().export(); }
+  finally { getDatabase().run('PRAGMA foreign_keys = ON'); }
+}
+export function openDatabaseSnapshot(bytes: Uint8Array): any {
+  return new (getDatabase().constructor)(bytes);
+}
+/** Replace the live database only after the new file was written successfully. */
+export function replaceDatabaseSnapshot(bytes: Uint8Array): void {
+  const next = openDatabaseSnapshot(bytes);
+  const temporaryPath = dbPath + '.restore.tmp';
+  try {
+    next.run('PRAGMA user_version = ' + (Math.max(dbGet('PRAGMA user_version').user_version, next.exec('PRAGMA user_version')[0].values[0][0]) + 1));
+    const snapshot = next.export();
+    next.run('PRAGMA foreign_keys = ON');
+    syncFile(temporaryPath, snapshot);
+    fs.renameSync(temporaryPath, dbPath);
+  } catch (error) {
+    next.close();
+    if (fs.existsSync(temporaryPath)) fs.unlinkSync(temporaryPath);
+    throw error;
+  }
+  const previous = db; db = next; isDirty = false; saveError = null; publishSaveStatus();
+  previous.close();
+  try { syncFile(dbPath + '.journal', ''); } catch { /* Older journal entries are below the restored sequence. */ }
+}
+
+/** The transaction journal is durable before any attachment is unlinked. */
+export function dbDurableTransaction(action: () => void): void { dbTransaction(action); }

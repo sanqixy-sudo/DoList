@@ -38,6 +38,8 @@ export interface Task {
   priority: Priority;
   startDate: string | null;
   dueDate: string | null;
+  plannedDate: string | null; // Local calendar date: YYYY-MM-DD
+  deletedAt?: string | null;
   completedAt: string | null;
   completion: number; // 0-100
   sortOrder: number;
@@ -124,20 +126,26 @@ export interface CreateTaskDto {
   priority?: Priority;
   startDate?: string;
   dueDate?: string;
+  plannedDate?: string;
   tags?: string[];
   attachments?: CreateTaskAttachmentDto[];
 }
 
 export interface UpdateTaskDto {
+  /** Restore the original completion time when undoing a status change. */
+  restoreCompletedAt?: string;
   title?: string;
   notes?: string | null;
   status?: TaskStatus;
   priority?: Priority;
   startDate?: string | null;
   dueDate?: string | null;
+  plannedDate?: string | null;
   listId?: string;
   sortOrder?: number;
 }
+
+export type BulkTaskUpdateDto = Pick<UpdateTaskDto, 'plannedDate' | 'dueDate' | 'listId' | 'status' | 'priority'>;
 
 export interface CreateListDto {
   name: string;

@@ -1,4 +1,4 @@
-import { Notification } from 'electron';
+import { Notification, powerMonitor } from 'electron';
 import path from 'path';
 import { reminderRepo } from '../db/repositories';
 
@@ -7,9 +7,11 @@ let schedulerInterval: NodeJS.Timeout | null = null;
 export function startScheduler(): void {
   schedulerInterval = setInterval(checkReminders, 30000);
   checkReminders();
+  powerMonitor.on('resume', checkReminders);
 }
 
 export function stopScheduler(): void {
+  powerMonitor.removeListener('resume', checkReminders);
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;

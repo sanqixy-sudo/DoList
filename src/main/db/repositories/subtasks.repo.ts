@@ -1,5 +1,6 @@
+import { requireActiveTask } from './task-guard';
 import { dbRun, dbGet, dbAll } from '../client';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'node:crypto';
 import type { Subtask, CreateSubtaskDto } from '../../../../types/models';
 
 export const subtaskRepo = {
@@ -17,6 +18,7 @@ export const subtaskRepo = {
   },
 
   create(data: CreateSubtaskDto): Subtask {
+    requireActiveTask(data.taskId);
     const id = uuidv4();
     const now = new Date().toISOString();
 
@@ -36,6 +38,9 @@ export const subtaskRepo = {
   },
 
   update(id: string, data: Partial<Subtask>): Subtask {
+    const taskId = this.findById(id)?.taskId;
+    if (!taskId) throw new Error('Subtask not found');
+    requireActiveTask(taskId);
     const now = new Date().toISOString();
     const updates: string[] = ['updated_at = ?'];
     const params: any[] = [now];
@@ -66,10 +71,14 @@ export const subtaskRepo = {
   },
 
   delete(id: string): void {
+    const taskId = this.findById(id)?.taskId;
+    if (!taskId) return;
+    requireActiveTask(taskId);
     dbRun('DELETE FROM subtasks WHERE id = ?', [id]);
   },
 
   reorder(taskId: string, ids: string[]): void {
+    requireActiveTask(taskId);
     ids.forEach((id, index) => {
       dbRun('UPDATE subtasks SET sort_order = ? WHERE id = ? AND task_id = ?', [index, id, taskId]);
     });

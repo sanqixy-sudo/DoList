@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Play, Pause, RotateCcw, SkipForward, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -13,6 +13,7 @@ export function PomodoroTimer() {
     status,
     phase,
     timeRemaining,
+    sessionDuration,
     currentTaskId,
     todayPomodoros,
     settings,
@@ -29,7 +30,9 @@ export function PomodoroTimer() {
   } = usePomodoroStore();
 
   const { isPomodoroOpen, togglePomodoro, pomodoroTaskId } = useUIStore();
-  const { tasks, toggleTask } = useTaskStore();
+  const { tasks, updateTask } = useTaskStore();
+  const [completionError, setCompletionError] = useState('');
+  const [completing, setCompleting] = useState(false);
 
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -55,10 +58,19 @@ export function PomodoroTimer() {
   }, [status, tick]);
 
   useEffect(() => {
-    if (Notification.permission === 'default') {
-      Notification.requestPermission();
+    if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      void Notification.requestPermission().catch(() => {});
     }
   }, []);
+
+  useEffect(() => {
+    const refresh = () => tick();
+    const unsubscribe = window.electronAPI.app.onResume(refresh);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    tick();
+    return () => { unsubscribe(); window.removeEventListener('focus', refresh); document.removeEventListener('visibilitychange', refresh); };
+  }, [tick, isPomodoroOpen]);
 
   if (!isPomodoroOpen) return null;
 
@@ -68,14 +80,7 @@ export function PomodoroTimer() {
   const seconds = timeRemaining % 60;
   const timeDisplay = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
 
-  const totalDuration =
-    phase === 'work'
-      ? settings.workDuration * 60
-      : phase === 'shortBreak'
-        ? settings.shortBreakDuration * 60
-        : settings.longBreakDuration * 60;
-
-  const progress = ((totalDuration - timeRemaining) / totalDuration) * 100;
+  const progress = Math.max(0, Math.min(100, ((sessionDuration - timeRemaining) / sessionDuration) * 100));
 
   const phaseLabels = {
     work: '专注时间',
@@ -90,25 +95,23 @@ export function PomodoroTimer() {
   };
 
   const handleCompleteTask = async () => {
-    if (currentTaskId) {
-      await toggleTask(currentTaskId);
-    }
-    reset();
-    dismissPauseConfirm();
-    setTaskId(null);
+    if (completing) return;
+    setCompleting(true); setCompletionError('');
+    try {
+      if (currentTaskId) await updateTask(currentTaskId, { status: 'done' });
+      reset(); dismissPauseConfirm(); setTaskId(null);
+    } catch { setCompletionError('任务未能标记完成，请重试。计时已暂停。'); }
+    finally { setCompleting(false); }
   };
-
-  const handleContinue = () => {
-    confirmPause();
-  };
+  const handleContinue = () => { confirmPause(); resume(); };
 
   return (
     <>
-      <div className="fixed bottom-4 right-4 z-50">
+      <div className="pomodoro-panel fixed bottom-4 right-4 z-50">
         <div className="bg-background border rounded-lg shadow-lg p-4 w-72">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-semibold">番茄钟</h3>
-            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={togglePomodoro}>
+            <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="收起番茄钟" onClick={togglePomodoro}>
               <X className="h-4 w-4" />
             </Button>
           </div>
@@ -204,6 +207,8 @@ export function PomodoroTimer() {
         taskTitle={currentTask?.title || ''}
         onComplete={handleCompleteTask}
         onContinue={handleContinue}
+        error={completionError}
+        busy={completing}
       />
     </>
   );

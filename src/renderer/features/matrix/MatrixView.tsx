@@ -1,3 +1,5 @@
+import { VirtualCardList } from '@/features/tasks/components/VirtualCardList';
+import { useWorkspaceTasks } from '@/features/tasks/use-workspace-tasks';
 import React, { useMemo, useState } from 'react';
 import { ArrowRight, Plus, Search, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -6,14 +8,16 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { useTaskStore } from '@/features/tasks/store';
 import { useUIStore } from '@/features/settings/uiStore';
-import { TaskContextMenu } from '@/features/tasks/components';
-import { formatMatrixTaskMeta, getMatrixQuadrantUpdates, matrixQuadrants } from './matrix-utils';
+import { TaskContextMenu } from '@/features/tasks/components/TaskContextMenu';
+import { formatMatrixTaskMeta, confirmMatrixMove, matrixQuadrants } from './matrix-utils';
 
 export function MatrixView() {
-  const { tasks, updateTask } = useTaskStore();
+  const tasks = useWorkspaceTasks();
+  const updateTask = useTaskStore(s => s.updateTask);
   const { selectTask, setCurrentView } = useUIStore();
   const [pickerQuadrantId, setPickerQuadrantId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [moveError, setMoveError] = useState('');
   const [applyingTaskId, setApplyingTaskId] = useState<string | null>(null);
 
   const activeTasks = useMemo(() => tasks.filter((task) => task.status === 'todo'), [tasks]);
@@ -62,12 +66,17 @@ export function MatrixView() {
   const applyTaskToQuadrant = async (taskId: string, quadrantId: string) => {
     if (applyingTaskId) return;
 
+    const task = activeTasks.find(task => task.id === taskId);
+    if (!task) return;
+    const updates = confirmMatrixMove(task, quadrantId as never);
+    if (!updates) return;
+    setMoveError('');
     setApplyingTaskId(taskId);
     try {
-      await updateTask(taskId, getMatrixQuadrantUpdates(quadrantId as never));
+      await updateTask(taskId, updates);
       closePicker();
     } catch (error) {
-      console.error('Failed to move task into matrix quadrant:', error);
+      setMoveError('移动失败，任务已保留，请重试。');
       setApplyingTaskId(null);
     }
   };
@@ -87,28 +96,29 @@ export function MatrixView() {
     const taskId = event.dataTransfer.getData('taskId');
     if (!taskId) return;
 
-    await updateTask(taskId, getMatrixQuadrantUpdates(quadrantId as never));
+    await applyTaskToQuadrant(taskId, quadrantId);
   };
 
   const hasAnyTodo = activeTasks.length > 0;
 
   return (
-    <div className="flex h-full w-full flex-1 flex-col p-4">
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-4">
+    <div className="matrix-view flex h-full w-full flex-1 flex-col overflow-y-auto p-4">
+      {moveError && <p role="alert" className="inline-error">{moveError}</p>}
+      <div className="matrix-grid grid min-h-0 flex-1 grid-cols-2 grid-rows-2 gap-4">
         {matrixQuadrants.map((quadrant) => {
           const quadrantTasks = tasksByQuadrant.get(quadrant.id) || [];
-          const candidateTasks = getCandidateTasks(quadrant.id);
+          const candidateTasks = pickerQuadrantId === quadrant.id ? getCandidateTasks(quadrant.id) : [];
           const isPickerOpen = pickerQuadrantId === quadrant.id;
           const Icon = quadrant.icon;
 
           return (
             <div
               key={quadrant.id}
-              className={cn('flex flex-col overflow-hidden rounded-lg border', quadrant.bgColor)}
+              className={cn('flex min-w-0 min-h-0 flex-col overflow-hidden rounded-lg border', quadrant.bgColor)}
               onDragOver={handleDragOver}
               onDrop={(event) => void handleDrop(event, quadrant.id)}
             >
-              <div className="flex items-center gap-2 border-b bg-background/60 p-3 backdrop-blur-sm">
+              <div className="flex flex-wrap items-center gap-2 border-b bg-background/60 p-3">
                 <Icon className={cn('h-5 w-5', quadrant.color)} />
                 <div>
                   <h3 className={cn('font-semibold', quadrant.color)}>{quadrant.title}</h3>
@@ -119,11 +129,12 @@ export function MatrixView() {
                   type="button"
                   size="sm"
                   variant={isPickerOpen ? 'secondary' : 'outline'}
-                  className="h-8 gap-1.5"
+                  className="matrix-picker-trigger h-8 gap-1.5"
+                  aria-label={(isPickerOpen ? '收起' : '移入任务到') + quadrant.title}
                   onClick={() => (isPickerOpen ? closePicker() : openPicker(quadrant.id))}
                 >
                   {isPickerOpen ? <X className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-                  {isPickerOpen ? '收起' : '添加待办'}
+                  <span>{isPickerOpen ? '收起' : '移入任务'}</span>
                 </Button>
               </div>
 
@@ -142,7 +153,7 @@ export function MatrixView() {
 
                   <div className="mt-3 max-h-52 overflow-y-auto rounded-md border bg-background">
                     {candidateTasks.length > 0 ? (
-                      candidateTasks.map((task) => (
+                      candidateTasks.slice(0, 100).map((task) => (
                         <button
                           key={task.id}
                           type="button"
@@ -170,33 +181,26 @@ export function MatrixView() {
                     )}
                   </div>
 
+                  {candidateTasks.length > 100 && <p className="mt-1 text-xs text-muted-foreground">显示前 100 项，请搜索缩小范围。</p>}
                   <p className="mt-2 text-xs text-muted-foreground">
                     选择一个已有待办后，会自动按该象限规则更新优先级和截止日期。
                   </p>
                 </div>
               )}
 
-              <ScrollArea className="flex-1 p-2">
-                <div className="space-y-2">
-                  {quadrantTasks.map((task) => (
-                    <TaskContextMenu key={task.id} task={task}>
-                      <div
-                        draggable
-                        onDragStart={(event) => handleDragStart(event, task.id)}
-                        onClick={() => selectTask(task.id)}
-                        className={cn(
-                          'cursor-pointer rounded-md border bg-background p-3 shadow-sm transition-all',
-                          'hover:-translate-y-0.5 hover:shadow-md'
-                        )}
-                      >
-                        <h4 className="truncate text-sm font-medium">{task.title}</h4>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {formatMatrixTaskMeta(task) || '未设置优先级和日期'}
-                        </p>
-                      </div>
-                    </TaskContextMenu>
-                  ))}
-
+              {quadrantTasks.length > 0 && <VirtualCardList tasks={quadrantTasks} label={quadrant.title} itemHeight={86} renderTask={task => (
+                <TaskContextMenu task={task}>
+                  <button type="button" data-card-id={task.id} draggable
+                    onDragStart={event => handleDragStart(event, task.id)}
+                    onClick={() => selectTask(task.id)}
+                    className="task-card-open h-full w-full rounded-md border bg-background p-3 text-left hover:border-primary/50">
+                    <span className="w-full truncate text-sm font-medium">{task.title}</span>
+                    <span className="w-full truncate text-xs text-muted-foreground">{formatMatrixTaskMeta(task) || '未设置优先级和日期'}</span>
+                  </button>
+                </TaskContextMenu>
+              )} />}
+              <ScrollArea className={quadrantTasks.length === 0 ? 'min-h-0 flex-1 p-2' : 'hidden'}>
+                <div>
                   {quadrantTasks.length === 0 && (
                     <div
                       className={cn(

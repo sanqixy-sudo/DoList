@@ -1,3 +1,4 @@
+import { localDay } from '../task-selectors';
 import {
   CheckCircle,
   Circle,
@@ -17,7 +18,7 @@ import {
   ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import { matrixQuadrants, getMatrixQuadrantUpdates, getTaskQuadrantId } from '@/features/matrix/matrix-utils';
+import { matrixQuadrants, confirmMatrixMove, getTaskQuadrantId } from '@/features/matrix/matrix-utils';
 import { useUIStore } from '@/features/settings/uiStore';
 import { useTaskStore } from '../store';
 import type { Priority, Task, TaskStatus } from '../../../../../types/models';
@@ -25,11 +26,13 @@ import type { Priority, Task, TaskStatus } from '../../../../../types/models';
 interface TaskContextMenuProps {
   task: Task;
   children: React.ReactNode;
+  disabled?: boolean;
 }
 
-export function TaskContextMenu({ task, children }: TaskContextMenuProps) {
-  const { updateTask, deleteTask } = useTaskStore();
-  const { selectTask } = useUIStore();
+export function TaskContextMenu({ task, children, disabled }: TaskContextMenuProps) {
+  const updateTask = useTaskStore(s => s.updateTask);
+  const deleteTask = useTaskStore(s => s.deleteTask);
+  const selectTask = useUIStore(s => s.selectTask);
   const currentQuadrantId = getTaskQuadrantId(task);
 
   const handleEdit = () => {
@@ -37,21 +40,23 @@ export function TaskContextMenu({ task, children }: TaskContextMenuProps) {
   };
 
   const handleDelete = () => {
-    void deleteTask(task.id);
+    void deleteTask(task.id).catch(() => {});
   };
 
   const handleStatusChange = (status: TaskStatus) => {
-    void updateTask(task.id, { status });
+    void updateTask(task.id, { status }).catch(() => {});
   };
 
   const handlePriorityChange = (priority: Priority) => {
-    void updateTask(task.id, { priority });
+    void updateTask(task.id, { priority }).catch(() => {});
   };
 
   const handleMoveToQuadrant = (quadrantId: (typeof matrixQuadrants)[number]['id']) => {
-    void updateTask(task.id, getMatrixQuadrantUpdates(quadrantId));
+    const updates = confirmMatrixMove(task, quadrantId);
+    if (updates) void updateTask(task.id, updates).catch(() => {});
   };
 
+  if (disabled) return <>{children}</>;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
@@ -61,6 +66,8 @@ export function TaskContextMenu({ task, children }: TaskContextMenuProps) {
           编辑
         </ContextMenuItem>
 
+        <ContextMenuItem onClick={() => void updateTask(task.id, { plannedDate: localDay() }).catch(() => {})}>加入今日计划</ContextMenuItem>
+        {task.plannedDate && <ContextMenuItem onClick={() => void updateTask(task.id, { plannedDate: null }).catch(() => {})}>清除计划日期（保留截止时间）</ContextMenuItem>}
         <ContextMenuSeparator />
 
         <ContextMenuSub>
@@ -142,7 +149,7 @@ export function TaskContextMenu({ task, children }: TaskContextMenuProps) {
 
         <ContextMenuItem className="text-destructive focus:text-destructive" onClick={handleDelete}>
           <Trash2 className="mr-2 h-4 w-4" />
-          删除
+          移入回收站
         </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>

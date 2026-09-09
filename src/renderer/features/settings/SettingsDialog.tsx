@@ -1,3 +1,5 @@
+import { MaintenanceSettings } from './MaintenanceSettings';
+import { BackupSettings } from './BackupSettings';
 import { useEffect, useState } from 'react';
 import { ExternalLink, Github, Monitor, Moon, Sun } from 'lucide-react';
 import {
@@ -14,6 +16,7 @@ const REPOSITORY_URL = 'https://github.com/sanqixy-sudo/DoList';
 export function SettingsDialog() {
   const { isSettingsOpen, toggleSettings, theme, setTheme } = useUIStore();
   const [appVersion, setAppVersion] = useState('');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -34,8 +37,8 @@ export function SettingsDialog() {
   };
 
   return (
-    <Dialog open={isSettingsOpen} onOpenChange={toggleSettings}>
-      <DialogContent className="sm:max-w-[480px]">
+    <Dialog open={isSettingsOpen} onOpenChange={() => { if (!busy) toggleSettings(); }}>
+      <DialogContent aria-describedby={undefined} className="settings-dialog sm:max-w-[560px] max-h-[88vh] overflow-y-auto" onEscapeKeyDown={e => { if (busy) e.preventDefault(); }} onPointerDownOutside={e => { if (busy) e.preventDefault(); }}>
         <DialogHeader>
           <DialogTitle>设置</DialogTitle>
         </DialogHeader>
@@ -74,6 +77,8 @@ export function SettingsDialog() {
               </div>
             </section>
 
+            <BackupSettings onBusy={setBusy} />
+            <MaintenanceSettings onBusy={setBusy} />
             <section className="rounded-lg border border-border/60 bg-muted/30 px-4 py-3">
               <div className="text-sm font-medium">版本号</div>
               <div className="mt-1 text-sm text-muted-foreground">

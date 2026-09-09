@@ -1,3 +1,4 @@
+import { useTaskStore } from '../tasks/store';
 import { create } from 'zustand';
 import type { Tag } from '../../../../types/models';
 
@@ -30,7 +31,7 @@ export const useTagStore = create<TagState>((set, get) => ({
   createTag: async (name: string, color?: string) => {
     try {
       const tag = await window.electronAPI.tags.create(name, color);
-      set((state) => ({ tags: [...state.tags, tag] }));
+      set((state) => ({ error: null, tags: [...state.tags, tag] }));
       return tag;
     } catch (error) {
       set({ error: (error as Error).message });
@@ -42,7 +43,7 @@ export const useTagStore = create<TagState>((set, get) => ({
     try {
       const tag = await window.electronAPI.tags.update(id, data);
       set((state) => ({
-        tags: state.tags.map((t) => (t.id === id ? tag : t)),
+        error: null, tags: state.tags.map((t) => (t.id === id ? tag : t)),
       }));
       return tag;
     } catch (error) {
@@ -54,8 +55,12 @@ export const useTagStore = create<TagState>((set, get) => ({
   deleteTag: async (id: string) => {
     try {
       await window.electronAPI.tags.delete(id);
+      useTaskStore.setState(state => ({
+        tasks: state.tasks.map(task => ({ ...task, tags: task.tags?.filter(tag => tag.id !== id) })),
+        trashedTasks: state.trashedTasks.map(task => ({ ...task, tags: task.tags?.filter(tag => tag.id !== id) })),
+      }));
       set((state) => ({
-        tags: state.tags.filter((t) => t.id !== id),
+        error: null, tags: state.tags.filter((t) => t.id !== id),
       }));
     } catch (error) {
       set({ error: (error as Error).message });

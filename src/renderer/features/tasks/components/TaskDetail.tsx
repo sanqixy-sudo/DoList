@@ -1,795 +1,124 @@
-import { useEffect, useMemo, useState } from 'react';
-import {
-  X,
-  Calendar as CalendarIcon,
-  ExternalLink,
-  Flag,
-  FolderOpen,
-  ImageIcon,
-  Paperclip,
-  Plus,
-  Trash2,
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { addDays, format, isToday, isTomorrow } from 'date-fns';
-import { zhCN } from 'date-fns/locale';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSub,
-  DropdownMenuSubContent,
-  DropdownMenuSubTrigger,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Calendar } from '@/components/ui/calendar';
-import { cn } from '@/lib/utils';
-import { useListStore } from '@/features/navigation/listStore';
-import { useUIStore } from '@/features/settings/uiStore';
-import { TimePicker, type TimeValue } from '@/components/ui/time-picker';
+import { createDraftMap } from '../draft-storage';
+import { useEffect, useRef, useState } from 'react';
+import { X, Check, Plus, Trash2, Paperclip, ExternalLink, Sun, Timer } from 'lucide-react';
 import { useTaskStore } from '../store';
-import { formatFileSize, isImageMimeType } from '@/features/tasks/attachment-utils';
+import { useUIStore } from '@/features/settings/uiStore';
+import { useListStore } from '@/features/navigation/listStore';
+import { Button } from '@/components/ui/button';
 import { AttachmentPreviewImage } from './AttachmentPreviewImage';
-import type { Task, Priority } from '../../../../../types/models';
+import { formatFileSize, isImageMimeType } from '../attachment-utils';
+import { localDay } from '../task-selectors';
+import type { UpdateTaskDto } from '../../../../../types/models';
 
-const UNGROUPED_ID = '__ungrouped__';
-const DEFAULT_REMINDER_TIME: TimeValue = { hour: 9, minute: 0 };
-
-type TaskDetailMode = 'inline' | 'drawer' | 'modal';
-
-interface TaskDetailProps {
-  mode?: TaskDetailMode;
-}
-
-function formatTaskMetaDate(dateString: string | null): string | null {
-  if (!dateString) return null;
-
-  const date = new Date(dateString);
-  if (Number.isNaN(date.getTime())) return null;
-
-  return format(date, 'yyyy年M月d日 HH:mm', { locale: zhCN });
-}
-
-export function TaskDetail({ mode = 'inline' }: TaskDetailProps) {
-  const { tasks, updateTask, deleteTask, setTask } = useTaskStore();
-  const { lists, projectGroups } = useListStore();
-  const { activeTaskId, closeDetailPanel, isDetailPanelOpen } = useUIStore();
-
-  const storeTask = useMemo(
-    () => tasks.find((item) => item.id === activeTaskId) ?? null,
-    [activeTaskId, tasks]
-  );
-  const [fallbackTask, setFallbackTask] = useState<Task | null>(null);
-  const task = fallbackTask ?? storeTask;
-
-  const [title, setTitle] = useState('');
-  const [notes, setNotes] = useState('');
-  const [newSubtask, setNewSubtask] = useState('');
-  const [reminderDate, setReminderDate] = useState<Date | undefined>(undefined);
-  const [reminderTime, setReminderTime] = useState<TimeValue | null>(DEFAULT_REMINDER_TIME);
-  const [isReminderDatePopoverOpen, setIsReminderDatePopoverOpen] = useState(false);
-
-  const groupedProjects = useMemo(() => {
-    const projectLists = lists.filter((list) => list.id !== 'inbox');
-    const groups = projectGroups.map((group) => ({
-      id: group.id,
-      name: group.name,
-      projects: projectLists.filter((list) => list.groupId === group.id),
-    }));
-    const ungrouped = projectLists.filter((list) => !list.groupId);
-    if (ungrouped.length > 0) {
-      groups.push({
-        id: UNGROUPED_ID,
-        name: '未分组',
-        projects: ungrouped,
-      });
-    }
-    return groups;
-  }, [lists, projectGroups]);
-
+// Retain unsaved drafts while navigating between tasks, including failed saves.
+const drafts = createDraftMap<{ title: string; notes: string }>('dolist-text-drafts-v1', value => typeof value.title === 'string' && typeof value.notes === 'string');
+const fieldDrafts = createDraftMap<UpdateTaskDto>('dolist-field-drafts-v1');
+export function TaskDetail({ mode: _mode }: { mode?: 'inline' | 'drawer' | 'modal' }) {
+  const id = useUIStore(s => s.activeTaskId);
+  const task = useTaskStore(s => s.tasks.find(t => t.id === id));
+  const lists = useListStore(s => s.lists);
+  const updateTask = useTaskStore(s => s.updateTask);
+  const setTask = useTaskStore(s => s.setTask);
+  const initial = drafts.get(id ?? '') ?? { title: task?.title ?? '', notes: task?.notes ?? '' };
+  const [title, setTitle] = useState(initial.title);
+  const [notes, setNotes] = useState(initial.notes);
+  const [busy, setBusy] = useState(0);
+  const [error, setError] = useState('');
+  const [fieldDraft, setFieldDraft] = useState<UpdateTaskDto>(() => fieldDrafts.get(id ?? '') ?? {});
+  const fieldDraftRef = useRef<UpdateTaskDto>(fieldDraft);
+  const [subtaskTitle, setSubtaskTitle] = useState('');
+  const [reminder, setReminder] = useState('');
+  const submitting = useRef(false);
   useEffect(() => {
-    let cancelled = false;
-
-    if (!activeTaskId || !isDetailPanelOpen) {
-      setFallbackTask(null);
-      return;
-    }
-
-    if (storeTask) {
-      setFallbackTask(storeTask);
-      return;
-    }
-
-    window.electronAPI.tasks
-      .get(activeTaskId)
-      .then((result) => {
-        if (!cancelled) {
-          setFallbackTask(result);
-        }
-      })
-      .catch((error) => {
-        console.error('Failed to load task detail:', error);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeTaskId, isDetailPanelOpen, storeTask]);
-
-  useEffect(() => {
-    if (task) {
-      setTitle(task.title);
-      setNotes(task.notes || '');
-      setReminderDate(undefined);
-      setReminderTime(DEFAULT_REMINDER_TIME);
-      setIsReminderDatePopoverOpen(false);
-    }
-  }, [task]);
-
-  if (!task || !isDetailPanelOpen) return null;
-
-  const currentList = lists.find((list) => list.id === task.listId) ?? null;
-  const createdAtText = formatTaskMetaDate(task.createdAt);
-  const updatedAtText = formatTaskMetaDate(task.updatedAt);
-  const startDateText = formatTaskMetaDate(task.startDate);
-  const dueDateText = formatTaskMetaDate(task.dueDate);
-  const completedAtText = formatTaskMetaDate(task.completedAt);
-
-  const updateCurrentTask = async (data: Parameters<typeof updateTask>[1]) => {
-    const updated = await updateTask(task.id, data);
-    setFallbackTask(updated);
-    return updated;
+    if (task && !drafts.has(task.id)) { setTitle(task.title); setNotes(task.notes ?? ''); }
+  }, [task?.id, task?.title, task?.notes, busy]);
+  if (!task) return <div className="p-6 text-sm text-muted-foreground">任务已不存在。<Button variant="ghost" onClick={() => useUIStore.getState().closeDetailPanel()}>关闭</Button></div>;
+  const displayed = { ...task, ...fieldDraft };
+  const writeDraft = (value: Partial<{ title: string; notes: string }>) => {
+    const next = { title, notes, ...value };
+    drafts.set(task.id, next); setTitle(next.title); setNotes(next.notes);
   };
-
-  const refreshTask = async () => {
-    const updated = await window.electronAPI.tasks.get(task.id);
-    if (updated) {
-      setFallbackTask(updated);
-      setTask(updated);
-    }
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(n => n + 1); setError('');
+    try { await action(); } catch { setError('修改未能保存。输入已保留，可用下方按钮重试。'); }
+    finally { setBusy(n => n - 1); }
   };
-
-  const handleTitleBlur = () => {
-    if (title !== task.title && title.trim()) {
-      void updateCurrentTask({ title: title.trim() });
-    }
+  const update = (data: UpdateTaskDto) => {
+    fieldDraftRef.current = { ...fieldDraftRef.current, ...data }; setFieldDraft(fieldDraftRef.current); fieldDrafts.set(task.id, fieldDraftRef.current);
+    return run(async () => {
+      await updateTask(task.id, data);
+      const remaining = { ...fieldDraftRef.current };
+      for (const key of Object.keys(data) as (keyof UpdateTaskDto)[]) { if (remaining[key] === data[key]) delete remaining[key]; }
+      fieldDraftRef.current = remaining; setFieldDraft(remaining);
+      if (Object.keys(remaining).length) fieldDrafts.set(task.id, remaining); else fieldDrafts.delete(task.id);
+    });
   };
-
-  const handleNotesBlur = () => {
-    if (notes !== (task.notes || '')) {
-      void updateCurrentTask({ notes: notes || null });
-    }
+  const saveDraft = () => {
+    const snapshot = drafts.get(task.id);
+    if (!snapshot) return;
+    if (!snapshot.title.trim()) { setError('任务标题不能为空。'); return; }
+    void run(async () => {
+      await updateTask(task.id, { title: snapshot.title.trim(), notes: snapshot.notes || null });
+      if (drafts.get(task.id) === snapshot) drafts.delete(task.id);
+    });
   };
-
-  const handlePickAttachments = async () => {
-    try {
-      const picked = await window.electronAPI.tasks.pickAttachments();
-      for (const attachment of picked) {
-        await window.electronAPI.tasks.addAttachment(task.id, attachment);
-      }
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to add attachments:', error);
-    }
+  const refresh = async () => { const fresh = await window.electronAPI.tasks.get(task.id); if (fresh) setTask(fresh); };
+  const addSubtask = async (event: React.FormEvent) => {
+    event.preventDefault(); if (submitting.current || !subtaskTitle.trim()) return;
+    submitting.current = true;
+    await run(async () => { await window.electronAPI.subtasks.create({ taskId: task.id, title: subtaskTitle.trim() }); setSubtaskTitle(''); await refresh(); });
+    submitting.current = false;
   };
-
-  const handlePasteAttachment = async (event: React.ClipboardEvent<HTMLDivElement>) => {
-    const hasImage = Array.from(event.clipboardData.items).some((item) => item.type.startsWith('image/'));
-    if (!hasImage) return;
-
+  const attach = () => run(async () => {
+    const picked = await window.electronAPI.tasks.pickAttachments();
+    try { for (const file of picked) await window.electronAPI.tasks.addAttachment(task.id, file); }
+    finally { await refresh(); }
+  });
+  const paste = async (event: React.ClipboardEvent) => {
+    if (!Array.from(event.clipboardData.items).some(item => item.type.startsWith('image/'))) return;
     event.preventDefault();
-
-    try {
-      const attachment = await window.electronAPI.tasks.pasteClipboardImage();
-      if (!attachment) return;
-
-      await window.electronAPI.tasks.addAttachment(task.id, attachment);
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to paste clipboard image:', error);
-    }
+    await run(async () => { const image = await window.electronAPI.tasks.pasteClipboardImage(); if (image) await window.electronAPI.tasks.addAttachment(task.id, image); await refresh(); });
   };
-
-  const handleRemoveAttachment = async (attachmentId: string) => {
-    try {
-      await window.electronAPI.tasks.removeAttachment(attachmentId);
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to remove attachment:', error);
-    }
+  const remove = async () => {
+    await run(async () => { await useTaskStore.getState().deleteTask(task.id); drafts.delete(task.id); fieldDrafts.delete(task.id); useUIStore.getState().closeDetailPanel(); });
   };
-
-  const handleOpenAttachment = async (filePath: string) => {
-    try {
-      await window.electronAPI.tasks.openAttachment(filePath);
-    } catch (error) {
-      console.error('Failed to open attachment:', error);
-    }
-  };
-
-  const handleAddSubtask = async () => {
-    if (!newSubtask.trim()) return;
-
-    try {
-      await window.electronAPI.subtasks.create({
-        taskId: task.id,
-        title: newSubtask.trim(),
-      });
-      setNewSubtask('');
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to add subtask:', error);
-    }
-  };
-
-  const handleToggleSubtask = async (subtaskId: string) => {
-    try {
-      await window.electronAPI.subtasks.toggle(subtaskId);
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to toggle subtask:', error);
-    }
-  };
-
-  const handleDeleteSubtask = async (subtaskId: string) => {
-    try {
-      await window.electronAPI.subtasks.delete(subtaskId);
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to delete subtask:', error);
-    }
-  };
-
-  const handleAddReminder = async () => {
-    if (!reminderDate) return;
-
-    const remindAt = new Date(reminderDate);
-    const nextReminderTime = reminderTime ?? DEFAULT_REMINDER_TIME;
-    remindAt.setHours(nextReminderTime.hour, nextReminderTime.minute, 0, 0);
-
-    try {
-      await window.electronAPI.reminders.create({
-        taskId: task.id,
-        remindAt: remindAt.toISOString(),
-      });
-      setReminderDate(undefined);
-      setReminderTime(DEFAULT_REMINDER_TIME);
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to add reminder:', error);
-    }
-  };
-
-  const handleDeleteReminder = async (reminderId: string) => {
-    try {
-      await window.electronAPI.reminders.delete(reminderId);
-      await refreshTask();
-    } catch (error) {
-      console.error('Failed to delete reminder:', error);
-    }
-  };
-
-  const handleDelete = async () => {
-    await deleteTask(task.id);
-    closeDetailPanel();
-  };
-
-  const priorityLabels: Record<Priority, string> = {
-    0: '无优先级',
-    1: '低优先级',
-    2: '中优先级',
-    3: '高优先级',
-  };
-
-  const priorityColors: Record<Priority, string> = {
-    0: 'text-muted-foreground',
-    1: 'text-priority-low',
-    2: 'text-priority-medium',
-    3: 'text-priority-high',
-  };
-
-  return (
-    <AnimatePresence>
-      <>
-        {mode !== 'inline' && (
-          <motion.button
-            type="button"
-            aria-label="关闭任务详情"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.18 }}
-            className="fixed inset-0 z-20 bg-black/12 backdrop-blur-[1px]"
-            onClick={closeDetailPanel}
-          />
-        )}
-
-        <motion.div
-          initial={{ x: '100%' }}
-          animate={{ x: 0 }}
-          exit={{ x: '100%' }}
-          transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-          onPasteCapture={(event) => void handlePasteAttachment(event)}
-          className={cn(
-            'flex flex-col bg-background',
-            mode === 'inline' && 'h-full w-[380px] border-l',
-            mode === 'drawer' && 'absolute inset-y-0 right-0 z-30 h-full w-[380px] border-l shadow-2xl',
-            mode === 'modal' &&
-              'fixed inset-x-4 bottom-4 top-16 z-30 h-auto w-auto rounded-2xl border shadow-2xl sm:left-auto sm:right-6 sm:top-20 sm:w-[min(720px,calc(100vw-3rem))]'
-          )}
-        >
-          <div className="flex items-center justify-between border-b px-4 py-3">
-            <h3 className="font-medium">任务详情</h3>
-            <Button variant="ghost" size="icon" onClick={closeDetailPanel}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-
-          <ScrollArea className="flex-1">
-            <div className="space-y-4 p-4">
-              <div>
-                <Input
-                  value={title}
-                  onChange={(event) => setTitle(event.target.value)}
-                  onBlur={handleTitleBlur}
-                  className="h-auto border-0 p-0 text-lg font-medium focus-visible:ring-0"
-                  placeholder="任务标题"
-                />
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className="h-8">
-                      <FolderOpen className="mr-1 h-4 w-4" />
-                      {currentList?.id === 'inbox' ? '收件箱' : currentList?.name || '选择项目'}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-64">
-                    <DropdownMenuItem onClick={() => void updateCurrentTask({ listId: 'inbox' })}>
-                      <FolderOpen className="mr-2 h-4 w-4 text-muted-foreground" />
-                      收件箱
-                    </DropdownMenuItem>
-                    {groupedProjects.map((group) => (
-                      <DropdownMenuSub key={group.id}>
-                        <DropdownMenuSubTrigger>{group.name}</DropdownMenuSubTrigger>
-                        <DropdownMenuSubContent className="w-56">
-                          {group.projects.map((project) => (
-                            <DropdownMenuItem
-                              key={project.id}
-                              onClick={() => void updateCurrentTask({ listId: project.id })}
-                            >
-                              <span
-                                className="mr-2 h-2.5 w-2.5 rounded-full"
-                                style={{ backgroundColor: project.color || '#64748b' }}
-                              />
-                              {project.name}
-                            </DropdownMenuItem>
-                          ))}
-                        </DropdownMenuSubContent>
-                      </DropdownMenuSub>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                <Popover>
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={cn('h-8', task.dueDate && 'border-primary text-primary')}
-                    >
-                      <CalendarIcon className="mr-1 h-4 w-4" />
-                      {task.dueDate
-                        ? format(new Date(task.dueDate), 'M月d日', { locale: zhCN })
-                        : '设置日期'}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-auto p-3" align="start">
-                    <div className="mb-3 flex gap-2">
-                      <Button
-                        type="button"
-                        variant={task.dueDate && isToday(new Date(task.dueDate)) ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => {
-                          const date = new Date();
-                          date.setHours(23, 59, 59, 999);
-                          void updateCurrentTask({ dueDate: date.toISOString() });
-                        }}
-                      >
-                        今天
-                      </Button>
-                      <Button
-                        type="button"
-                        variant={task.dueDate && isTomorrow(new Date(task.dueDate)) ? 'default' : 'outline'}
-                        size="sm"
-                        onClick={() => {
-                          const date = addDays(new Date(), 1);
-                          date.setHours(23, 59, 59, 999);
-                          void updateCurrentTask({ dueDate: date.toISOString() });
-                        }}
-                      >
-                        明天
-                      </Button>
-                    </div>
-
-                    <Calendar
-                      mode="single"
-                      selected={task.dueDate ? new Date(task.dueDate) : undefined}
-                      onSelect={(date) => {
-                        if (!date) {
-                          void updateCurrentTask({ dueDate: null });
-                          return;
-                        }
-                        const value = new Date(date);
-                        value.setHours(23, 59, 59, 999);
-                        void updateCurrentTask({ dueDate: value.toISOString() });
-                      }}
-                      initialFocus
-                    />
-
-                    {task.dueDate && (
-                      <>
-                        <Separator className="my-3" />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          className="w-full text-destructive hover:text-destructive"
-                          onClick={() => void updateCurrentTask({ dueDate: null })}
-                        >
-                          <X className="mr-1 h-4 w-4" />
-                          清除日期
-                        </Button>
-                      </>
-                    )}
-                  </PopoverContent>
-                </Popover>
-
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="outline" size="sm" className={cn('h-8', priorityColors[task.priority])}>
-                      <Flag className="mr-1 h-4 w-4" />
-                      {priorityLabels[task.priority]}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    <DropdownMenuItem onClick={() => void updateCurrentTask({ priority: 3 })}>
-                      <Flag className="mr-2 h-4 w-4 text-priority-high" />
-                      高优先级
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void updateCurrentTask({ priority: 2 })}>
-                      <Flag className="mr-2 h-4 w-4 text-priority-medium" />
-                      中优先级
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void updateCurrentTask({ priority: 1 })}>
-                      <Flag className="mr-2 h-4 w-4 text-priority-low" />
-                      低优先级
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => void updateCurrentTask({ priority: 0 })}>
-                      <Flag className="mr-2 h-4 w-4 text-muted-foreground" />
-                      无优先级
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </div>
-
-              <Separator />
-
-              <div>
-                <label className="mb-2 block text-sm font-medium text-muted-foreground">备注</label>
-                <textarea
-                  value={notes}
-                  onChange={(event) => setNotes(event.target.value)}
-                  onBlur={handleNotesBlur}
-                  placeholder="添加备注..."
-                  className="min-h-[100px] w-full resize-none rounded-md border bg-transparent p-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-              </div>
-
-              <Separator />
-
-              <div>
-                <label className="mb-2 block text-sm font-medium text-muted-foreground">时间信息</label>
-                <div className="space-y-2 rounded-xl border bg-muted/20 p-3">
-                  {createdAtText && (
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="text-muted-foreground">创建时间</span>
-                      <span className="font-medium">{createdAtText}</span>
-                    </div>
-                  )}
-                  {startDateText && (
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="text-muted-foreground">开始时间</span>
-                      <span>{startDateText}</span>
-                    </div>
-                  )}
-                  {dueDateText && (
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="text-muted-foreground">截止时间</span>
-                      <span>{dueDateText}</span>
-                    </div>
-                  )}
-                  {completedAtText && (
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="text-muted-foreground">完成时间</span>
-                      <span>{completedAtText}</span>
-                    </div>
-                  )}
-                  {updatedAtText && (
-                    <div className="flex items-center justify-between gap-3 text-sm">
-                      <span className="text-muted-foreground">最后更新</span>
-                      <span>{updatedAtText}</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              <Separator />
-
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <label className="block text-sm font-medium text-muted-foreground">提醒</label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8"
-                    onClick={() => void handleAddReminder()}
-                    disabled={!reminderDate}
-                  >
-                    <Plus className="mr-2 h-4 w-4" />
-                    添加提醒
-                  </Button>
-                </div>
-
-                <div className="rounded-xl border bg-muted/20 p-3">
-                  <div className="flex flex-wrap gap-2">
-                    <Popover open={isReminderDatePopoverOpen} onOpenChange={setIsReminderDatePopoverOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className={cn('h-8', reminderDate && 'border-primary text-primary')}
-                        >
-                          <CalendarIcon className="mr-1 h-4 w-4" />
-                          {reminderDate
-                            ? format(reminderDate, 'M月d日', { locale: zhCN })
-                            : '选择提醒日期'}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-3" align="start">
-                        <div className="mb-3 flex gap-2">
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setReminderDate(new Date());
-                              setIsReminderDatePopoverOpen(false);
-                            }}
-                          >
-                            今天
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              setReminderDate(addDays(new Date(), 1));
-                              setIsReminderDatePopoverOpen(false);
-                            }}
-                          >
-                            明天
-                          </Button>
-                        </div>
-
-                        <Calendar
-                          mode="single"
-                          selected={reminderDate}
-                          onSelect={(date) => {
-                            setReminderDate(date ?? undefined);
-                            if (date) {
-                              setIsReminderDatePopoverOpen(false);
-                            }
-                          }}
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-
-                    {reminderDate && (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 text-muted-foreground"
-                        onClick={() => {
-                          setReminderDate(undefined);
-                          setReminderTime(DEFAULT_REMINDER_TIME);
-                        }}
-                      >
-                        清除
-                      </Button>
-                    )}
-                  </div>
-
-                  <TimePicker value={reminderTime} onChange={setReminderTime} className="mt-3" />
-                </div>
-
-                {task.reminders && task.reminders.length > 0 ? (
-                  <div className="mt-3 space-y-2">
-                    {task.reminders.map((reminder) => (
-                      <div
-                        key={reminder.id}
-                        className="flex items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-sm font-medium">
-                            {format(new Date(reminder.remindAt), 'M月d日 HH:mm', { locale: zhCN })}
-                          </div>
-                          <div className="text-xs text-muted-foreground">
-                            {reminder.isSent ? '已发送' : '待提醒'}
-                          </div>
-                        </div>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => void handleDeleteReminder(reminder.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="mt-3 rounded-lg border border-dashed bg-muted/20 px-3 py-4 text-center text-sm text-muted-foreground">
-                    还没有提醒
-                  </div>
-                )}
-              </div>
-
-              <Separator />
-
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-2">
-                  <label className="block text-sm font-medium text-muted-foreground">附件</label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="h-8"
-                    onClick={() => void handlePickAttachments()}
-                  >
-                    <Paperclip className="mr-2 h-4 w-4" />
-                    添加附件
-                  </Button>
-                </div>
-                <div className="mb-3 text-[11px] text-muted-foreground">Support file picker and Ctrl+V image paste.</div>
-
-                {task.attachments && task.attachments.length > 0 ? (
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    {task.attachments.map((attachment) => (
-                      <div key={attachment.id} className="overflow-hidden rounded-xl border bg-card">
-                        {isImageMimeType(attachment.mimeType) ? (
-                          <div className="bg-muted/30 p-2">
-                            <AttachmentPreviewImage
-                              filePath={attachment.filePath}
-                              alt={attachment.name}
-                              className="h-36 w-full rounded-lg object-cover"
-                              fallbackClassName="h-36 w-full rounded-lg"
-                            />
-                          </div>
-                        ) : (
-                          <button
-                            type="button"
-                            className="flex h-36 w-full items-center justify-center bg-muted/30"
-                            onClick={() => void handleOpenAttachment(attachment.filePath)}
-                          >
-                            <ImageIcon className="h-10 w-10 text-muted-foreground" />
-                          </button>
-                        )}
-                        <div className="p-3">
-                          <div className="truncate text-sm font-medium">{attachment.name}</div>
-                          <div className="mt-1 text-xs text-muted-foreground">
-                            {formatFileSize(attachment.fileSize)}
-                          </div>
-                          <div className="mt-3 flex items-center gap-2">
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              className="h-8 flex-1"
-                              onClick={() => void handleOpenAttachment(attachment.filePath)}
-                            >
-                              <ExternalLink className="mr-2 h-3.5 w-3.5" />
-                              打开
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-destructive hover:text-destructive"
-                              onClick={() => void handleRemoveAttachment(attachment.id)}
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="rounded-lg border border-dashed bg-muted/20 px-3 py-6 text-center text-sm text-muted-foreground">
-                    还没有附件，可以添加图片或文件。
-                  </div>
-                )}
-              </div>
-
-              <Separator />
-
-              <div>
-                <label className="mb-2 block text-sm font-medium text-muted-foreground">子任务</label>
-
-                <div className="space-y-2">
-                  {task.subtasks?.map((subtask) => (
-                    <div key={subtask.id} className="group flex items-center gap-2">
-                      <Checkbox checked={subtask.isDone} onCheckedChange={() => handleToggleSubtask(subtask.id)} />
-                      <span className={cn('flex-1 text-sm', subtask.isDone && 'text-muted-foreground line-through')}>
-                        {subtask.title}
-                      </span>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 opacity-0 group-hover:opacity-100"
-                        onClick={() => handleDeleteSubtask(subtask.id)}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  ))}
-
-                  <div className="flex items-center gap-2">
-                    <Plus className="h-4 w-4 text-muted-foreground" />
-                    <Input
-                      value={newSubtask}
-                      onChange={(event) => setNewSubtask(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault();
-                          void handleAddSubtask();
-                        }
-                      }}
-                      placeholder="添加子任务..."
-                      className="h-8 border-0 p-0 focus-visible:ring-0"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </ScrollArea>
-
-          <div className="border-t p-4">
-            <Button
-              variant="ghost"
-              className="w-full text-destructive hover:text-destructive"
-              onClick={handleDelete}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              删除任务
-            </Button>
-          </div>
-        </motion.div>
-      </>
-    </AnimatePresence>
-  );
+  return <div className="detail-panel" onPasteCapture={event => void paste(event)}>
+    <div className="detail-top">
+      <button type="button" className="flex items-center gap-2 text-xs text-muted-foreground" disabled={busy > 0} onClick={() => void update({ status: task.status === 'done' ? 'todo' : 'done' })}><span className={'task-check ' + (task.status === 'done' ? 'is-done' : '')}>{task.status === 'done' && <Check size={12} />}</span>{task.status === 'done' ? '已完成' : '标记完成'}</button>
+      <Button size="icon" variant="ghost" aria-label="关闭任务详情" onClick={() => { saveDraft(); useUIStore.getState().closeDetailPanel(); }}><X size={16} /></Button>
+    </div>
+    <div className="detail-scroll">
+      <textarea rows={2} aria-label="任务标题" className="detail-title" value={title} onChange={e => writeDraft({ title: e.target.value })} onBlur={saveDraft} />
+      <div role="status" className="mt-1 mb-5 text-[10px] text-muted-foreground">{busy ? '正在保存…' : (drafts.has(task.id) || Object.keys(fieldDraft).length > 0) ? '有未保存的编辑' : '已保存'}</div>
+      {(drafts.persistenceError || fieldDrafts.persistenceError) && <div role="alert" className="inline-error">{drafts.persistenceError || fieldDrafts.persistenceError}</div>}
+      {error && <div role="alert" className="inline-error">{error}{Object.keys(fieldDraft).length > 0 && <button disabled={busy > 0} onClick={() => void update(fieldDraft)}>重试保存字段</button>}{drafts.has(task.id) && <button onClick={saveDraft}>重试保存</button>}</div>}
+      {!error && !busy && Object.keys(fieldDraft).length > 0 && <div role="status" className="inline-error">有尚未保存的字段修改。<button onClick={() => void update(fieldDraft)}>重试保存字段</button></div>}
+      <label className="detail-field"><span>计划日期</span><input type="date" value={displayed.plannedDate ?? ''} onChange={e => void update({ plannedDate: e.target.value || null })} /></label>
+      <div className="flex justify-end"><button type="button" className="flex items-center gap-1 text-[11px] text-primary" onClick={() => void update({ plannedDate: localDay() })}><Sun size={12} />安排到今天</button></div>
+      <label className="detail-field"><span>截止时间</span><input type="datetime-local" value={displayed.dueDate ? toLocalInput(displayed.dueDate!) : ''} onChange={e => void update({ dueDate: e.target.value ? new Date(e.target.value).toISOString() : null })} /></label>
+      <label className="detail-field"><span>所属项目</span><select value={displayed.listId} onChange={e => void update({ listId: e.target.value })}>{lists.map(list => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
+      <label className="detail-field"><span>优先级</span><select value={displayed.priority} onChange={e => void update({ priority: Number(e.target.value) as 0 | 1 | 2 | 3 })}><option value={0}>无优先级</option><option value={1}>低优先级</option><option value={2}>中优先级</option><option value={3}>高优先级</option></select></label>
+      <label className="detail-field"><span>任务状态</span><select value={displayed.status} onChange={e => void update({ status: e.target.value as 'todo' | 'done' | 'canceled' })}><option value="todo">待办</option><option value="done">已完成</option><option value="canceled">已取消</option></select></label>
+      {!!task.tags?.length && <div className="flex flex-wrap gap-2 mt-4">{task.tags.map(tag => <span key={tag.id} className="rounded bg-muted px-2 py-1 text-[11px]">#{tag.name}</span>)}</div>}
+      <section className="detail-block"><h3>备注</h3><textarea className="detail-notes" aria-label="任务备注" value={notes} onChange={e => writeDraft({ notes: e.target.value })} onBlur={saveDraft} placeholder="补充想法、链接或需要记住的事…" /></section>
+      <section className="detail-block"><h3>子任务 <span className="ml-2 font-normal text-muted-foreground">{task.subtasks?.filter(s => s.isDone).length ?? 0}/{task.subtasks?.length ?? 0}</span></h3>
+        {task.subtasks?.map(sub => <div key={sub.id} className="flex items-center gap-2 py-2 text-xs"><input type="checkbox" aria-label={'完成子任务：' + sub.title} checked={sub.isDone} disabled={busy > 0} onChange={() => void run(async () => { await window.electronAPI.subtasks.toggle(sub.id); await refresh(); })} /><span className={'min-w-0 flex-1 break-words ' + (sub.isDone ? 'line-through text-muted-foreground' : '')}>{sub.title}</span><button aria-label={'删除子任务：' + sub.title} onClick={() => { if (window.confirm('删除子任务“' + sub.title + '”？')) void run(async () => { await window.electronAPI.subtasks.delete(sub.id); await refresh(); }); }}><X size={12} /></button></div>)}
+        <form onSubmit={addSubtask} className="flex gap-2 mt-2"><input className="detail-small-input flex-1" aria-label="新子任务" placeholder="添加一个小步骤" value={subtaskTitle} disabled={busy > 0} onChange={e => setSubtaskTitle(e.target.value)} onKeyDown={e => { if (e.nativeEvent.isComposing && e.key === 'Enter') e.preventDefault(); }} /><Button type="submit" variant="ghost" size="icon" aria-label="添加子任务" disabled={busy > 0 || !subtaskTitle.trim()}><Plus size={16} /></Button></form>
+      </section>
+      <details className="detail-block"><summary>提醒 <span className="ml-2 font-normal text-muted-foreground">{task.reminders?.length || ''}</span></summary>
+        {task.reminders?.map(rem => <div key={rem.id} className="flex items-center gap-2 py-2 text-xs"><span className="flex-1">{new Date(rem.remindAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · {rem.isSent ? '已提醒' : '待提醒'}</span><button aria-label="删除提醒" onClick={() => void run(async () => { await window.electronAPI.reminders.delete(rem.id); await refresh(); })}><X size={13} /></button></div>)}
+        <div className="flex gap-2"><input aria-label="提醒时间" type="datetime-local" className="detail-small-input flex-1" value={reminder} onChange={e => setReminder(e.target.value)} /><Button variant="ghost" size="icon" aria-label="添加提醒" disabled={!reminder || busy > 0} onClick={() => void run(async () => { const date = new Date(reminder); if (date.getTime() <= Date.now()) { setError('请选择未来的提醒时间。'); return; } await window.electronAPI.reminders.create({ taskId: task.id, remindAt: date.toISOString() }); setReminder(''); await refresh(); })}><Plus size={16} /></Button></div>
+      </details>
+      <details className="detail-block" open={!!task.attachments?.length}><summary>附件 <span className="ml-2 font-normal text-muted-foreground">{task.attachments?.length || ''}</span></summary>
+        {task.attachments?.map(file => <div key={file.id} className="my-2 flex items-center gap-2 rounded-lg bg-muted/50 p-2">{isImageMimeType(file.mimeType) ? <AttachmentPreviewImage filePath={file.filePath} alt={file.name} className="h-10 w-10 rounded object-cover" fallbackClassName="h-10 w-10" /> : <Paperclip size={18} />}<button className="min-w-0 flex-1 text-left" onClick={() => void run(() => window.electronAPI.tasks.openAttachment(file.filePath))}><span className="block truncate text-xs">{file.name}</span><span className="text-[10px] text-muted-foreground">{formatFileSize(file.fileSize)} <ExternalLink className="inline" size={10} /></span></button><button aria-label={'删除附件：' + file.name} onClick={() => { if (window.confirm('永久删除附件“' + file.name + '”？')) void run(async () => { await window.electronAPI.tasks.removeAttachment(file.id); await refresh(); }); }}><X size={13} /></button></div>)}
+        <Button variant="ghost" size="sm" disabled={busy > 0} onClick={() => void attach()}><Paperclip size={14} className="mr-2" />添加附件</Button><p className="mt-2 text-[10px] text-muted-foreground">也可以直接粘贴图片。</p>
+      </details>
+      <div className="detail-block flex items-center justify-between"><Button size="sm" variant="ghost" onClick={() => useUIStore.getState().startPomodoroForTask(task.id)}><Timer size={14} className="mr-2" />开始专注</Button><Button size="icon" variant="ghost" aria-label="移入回收站" title="移入回收站，可以恢复" disabled={busy > 0} onClick={() => void remove()}><Trash2 size={14} className="text-muted-foreground" /></Button></div>
+    </div>
+  </div>;
+}
+function toLocalInput(value: string): string {
+  const date = new Date(value);
+  const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return shifted.toISOString().slice(0, 16);
 }

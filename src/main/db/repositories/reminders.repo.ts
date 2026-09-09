@@ -1,5 +1,7 @@
+import { normalizeTimestamp } from '../../../../types/validation';
+import { requireActiveTask } from './task-guard';
 import { dbRun, dbGet, dbAll } from '../client';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'node:crypto';
 import type { Reminder, CreateReminderDto } from '../../../../types/models';
 
 export const reminderRepo = {
@@ -22,7 +24,7 @@ export const reminderRepo = {
       `SELECT r.*, t.title as task_title
        FROM reminders r
        JOIN tasks t ON r.task_id = t.id
-       WHERE r.is_sent = 0 AND r.remind_at <= ?
+       WHERE r.is_sent = 0 AND r.remind_at <= ? AND t.status = 'todo' AND t.is_archived = 0 AND t.deleted_at IS NULL
        ORDER BY r.remind_at ASC`,
       [now]
     );
@@ -33,6 +35,8 @@ export const reminderRepo = {
   },
 
   create(data: CreateReminderDto): Reminder {
+    data = { ...data, remindAt: normalizeTimestamp(data.remindAt)! };
+    requireActiveTask(data.taskId);
     const id = uuidv4();
     const now = new Date().toISOString();
 
@@ -51,6 +55,9 @@ export const reminderRepo = {
   },
 
   delete(id: string): void {
+    const taskId = this.findById(id)?.taskId;
+    if (!taskId) return;
+    requireActiveTask(taskId);
     dbRun('DELETE FROM reminders WHERE id = ?', [id]);
   },
 

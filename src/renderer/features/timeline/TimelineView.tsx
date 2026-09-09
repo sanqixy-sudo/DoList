@@ -1,3 +1,5 @@
+import { PagedCollection } from '@/features/tasks/components/PagedCollection';
+import { useWorkspaceTasks } from '@/features/tasks/use-workspace-tasks';
 import { useMemo, useState } from 'react';
 import {
   addDays,
@@ -27,13 +29,13 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useUIStore } from '@/features/settings/uiStore';
-import { TaskContextMenu } from '@/features/tasks/components';
+import { TaskContextMenu } from '@/features/tasks/components/TaskContextMenu';
 import { useTaskStore } from '@/features/tasks/store';
 import { cn } from '@/lib/utils';
 import type { Task } from '../../../../types/models';
 
 type TimelineViewType = 'week' | 'month' | 'custom';
-type TimelineEventType = 'completed' | 'due' | 'start';
+type TimelineEventType = 'completed' | 'planned' | 'due' | 'start';
 
 interface TimelineEntry {
   task: Task;
@@ -89,7 +91,7 @@ function getEventBadgeClasses(type: TimelineEventType): string {
     return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
   }
 
-  if (type === 'start') {
+  if (type === 'start' || type === 'planned') {
     return 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300';
   }
 
@@ -99,6 +101,7 @@ function getEventBadgeClasses(type: TimelineEventType): string {
 function getEventLabel(type: TimelineEventType): string {
   if (type === 'completed') return '已完成';
   if (type === 'start') return '开始';
+  if (type === 'planned') return '计划';
   return '截止';
 }
 
@@ -119,6 +122,8 @@ function getTimelineEntry(task: Task): TimelineEntry | null {
     };
   }
 
+  const planned = toTimelineDate(task.plannedDate);
+  if (planned) return { task, date: startOfDay(planned), type: 'planned', sortTime: planned.getTime() };
   const dueDate = toTimelineDate(task.dueDate);
   if (dueDate) {
     return {
@@ -143,7 +148,7 @@ function getTimelineEntry(task: Task): TimelineEntry | null {
 }
 
 export function TimelineView() {
-  const { tasks } = useTaskStore();
+  const tasks = useWorkspaceTasks();
   const { selectTask } = useUIStore();
 
   const [viewType, setViewType] = useState<TimelineViewType>('week');
@@ -264,13 +269,13 @@ export function TimelineView() {
     setViewType('custom');
     setDateRange({
       from: range.from,
-      to: range.to || range.from,
+      to: range.to && differenceInDays(range.to, range.from) <= 365 ? range.to : addDays(range.from, Math.min(365, differenceInDays(range.to ?? range.from, range.from))),
     });
   };
 
   const formatDateRange = () => {
     if (viewType === 'week') {
-      return `本周 (${format(dateRange.from, 'M.d')} - ${format(dateRange.to, 'M.d')})`;
+      return `${format(dateRange.from, 'yyyy.M.d')} - ${format(dateRange.to, 'M.d')}`;
     }
 
     if (viewType === 'month') {
@@ -282,16 +287,16 @@ export function TimelineView() {
 
   return (
     <div className="flex h-full w-full flex-1 flex-col">
-      <div className="flex items-center justify-between border-b px-6 py-4">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
         <div>
           <h2 className="text-lg font-semibold">时间线</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            已完成任务按完成日期显示，未完成任务按截止日期或开始日期显示。
+            已完成任务按完成日期显示，其余按计划日期、截止日期或开始日期显示。自定义范围最多一年。
           </p>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={navigatePrev}>
+          <Button variant="ghost" size="icon" aria-label="上一时间段" onClick={navigatePrev}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
 
@@ -335,135 +340,23 @@ export function TimelineView() {
             </PopoverContent>
           </Popover>
 
-          <Button variant="ghost" size="icon" onClick={navigateNext}>
+          <Button variant="ghost" size="icon" aria-label="下一时间段" onClick={navigateNext}>
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="relative px-6 py-4">
-          <div className="absolute bottom-0 left-[120px] top-0 w-px bg-border" />
-
-          {days.map((day) => {
-            const dateKey = format(day, 'yyyy-MM-dd');
-            const dayEntries = entriesByDate.get(dateKey) || [];
-            const hasEntry = dayEntries.length > 0;
-            const today = isToday(day);
-
-            return (
-              <div key={dateKey} className="relative mb-6 flex last:mb-0">
-                <div className="w-[100px] shrink-0 pr-6 text-right">
-                  <div className={cn('text-sm font-medium', today && 'text-primary')}>{formatDateLabel(day)}</div>
-                  <div className="text-xs text-muted-foreground">{format(day, 'EEEE', { locale: zhCN })}</div>
-                </div>
-
-                <div className="relative flex items-start">
-                  <div
-                    className={cn(
-                      'absolute left-[20px] top-2 z-10 h-3 w-3 rounded-full border-2 bg-background',
-                      today
-                        ? 'border-primary bg-primary'
-                        : hasEntry
-                          ? 'border-primary'
-                          : 'border-muted-foreground/30'
-                    )}
-                  />
-                </div>
-
-                <div className="min-h-[40px] flex-1 pl-12">
-                  {hasEntry ? (
-                    <div className="space-y-2">
-                      {dayEntries.map((entry) => {
-                        const { task, type } = entry;
-
-                        return (
-                          <TaskContextMenu key={`${task.id}-${type}-${dateKey}`} task={task}>
-                            <div
-                              onClick={() => selectTask(task.id)}
-                              className={cn(
-                                'group cursor-pointer rounded-lg border-l-4 bg-card p-3 shadow-sm',
-                                'transition-all hover:translate-x-1 hover:shadow-md',
-                                getPriorityBorderColor(task.priority),
-                                task.status === 'done' && 'opacity-70'
-                              )}
-                            >
-                              <div className="flex items-start gap-3">
-                                <div
-                                  className={cn(
-                                    'mt-1.5 h-2 w-2 shrink-0 rounded-full',
-                                    task.status === 'done'
-                                      ? 'bg-green-500'
-                                      : task.status === 'canceled'
-                                        ? 'bg-gray-400'
-                                        : getPriorityColor(task.priority)
-                                  )}
-                                />
-
-                                <div className="min-w-0 flex-1">
-                                  <div className="flex items-start justify-between gap-3">
-                                    <h4
-                                      className={cn(
-                                        'text-sm font-medium',
-                                        task.status === 'done' && 'text-muted-foreground line-through'
-                                      )}
-                                    >
-                                      {task.title}
-                                    </h4>
-
-                                    <span
-                                      className={cn(
-                                        'shrink-0 rounded-full border px-2 py-0.5 text-[11px] font-medium',
-                                        getEventBadgeClasses(type)
-                                      )}
-                                    >
-                                      {getEventLabel(type)}
-                                    </span>
-                                  </div>
-
-                                  {task.notes && (
-                                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{task.notes}</p>
-                                  )}
-
-                                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                                    {task.subtasks && task.subtasks.length > 0 && (
-                                      <span className="text-xs text-muted-foreground">
-                                        子任务 {task.subtasks.filter((subtask) => subtask.isDone).length}/{task.subtasks.length}
-                                      </span>
-                                    )}
-
-                                    {task.tags && task.tags.length > 0 && (
-                                      <div className="flex flex-wrap gap-1">
-                                        {task.tags.slice(0, 2).map((tag) => (
-                                          <span
-                                            key={tag.id}
-                                            className="rounded px-1.5 py-0.5 text-xs"
-                                            style={{ backgroundColor: tag.color || '#e5e5e5' }}
-                                          >
-                                            {tag.name}
-                                          </span>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          </TaskContextMenu>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="flex h-[40px] items-center">
-                      <span className="text-xs text-muted-foreground/50">这一天没有时间线记录</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      </ScrollArea>
+      <PagedCollection key={dateRange.from.toISOString() + dateRange.to.toISOString()} label="时间线" items={days.flatMap(day => entriesByDate.get(format(day, 'yyyy-MM-dd')) ?? [])} renderItem={entry => (
+        <TaskContextMenu task={entry.task}>
+          <button className="timeline-entry flex w-full min-w-0 items-start gap-3 rounded-lg border bg-card p-3 text-left hover:border-primary/40" onClick={() => selectTask(entry.task.id)}>
+            <span className="w-16 shrink-0 text-xs text-muted-foreground">{formatDateLabel(entry.date)}<br />{format(entry.date, 'EEE', { locale: zhCN })}</span>
+            <span className="min-w-0 flex-1"><span className={cn('block break-words text-sm font-medium', entry.task.status === 'done' && 'line-through text-muted-foreground')}>{entry.task.title}</span>
+              {entry.task.notes && <span className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">{entry.task.notes}</span>}
+            </span>
+            <span className={cn('shrink-0 rounded-full border px-2 py-0.5 text-xs', getEventBadgeClasses(entry.type))}>{getEventLabel(entry.type)}</span>
+          </button>
+        </TaskContextMenu>
+      )} />
     </div>
   );
 }

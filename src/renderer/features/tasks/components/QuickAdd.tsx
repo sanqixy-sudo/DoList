@@ -1,3 +1,4 @@
+import { localDay } from '../task-selectors';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Calendar as CalendarIcon,
@@ -29,13 +30,18 @@ interface QuickAddProps {
   className?: string;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
 }
 
 const UNGROUPED_ID = '__ungrouped__';
 
-export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
+export function QuickAdd({ className, isOpen, onOpenChange, onSavingChange }: QuickAddProps) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const [title, setTitle] = useState('');
+  const [plannedDate, setPlannedDate] = useState(() => currentViewForPlan());
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const savingRef = useRef(false);
   const [priority, setPriority] = useState<Priority>(0);
   const [dueDate, setDueDate] = useState<Date | undefined>(undefined);
   const [dueTime, setDueTime] = useState<TimeValue | null>(null);
@@ -54,17 +60,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
 
   const projectLists = useMemo(() => lists.filter((list) => list.id !== 'inbox'), [lists]);
 
-  const defaultListId = useMemo(() => {
-    if (currentView === 'list' && activeListId) return activeListId;
-    if (activeListId && activeListId !== 'inbox') return activeListId;
-
-    if (activeProjectGroupId && activeProjectGroupId !== '__all_groups__') {
-      const firstProject = projectLists.find((list) => list.groupId === activeProjectGroupId);
-      if (firstProject) return firstProject.id;
-    }
-
-    return 'inbox';
-  }, [activeListId, activeProjectGroupId, currentView, projectLists]);
+  const defaultListId = currentView === 'list' && activeListId ? activeListId : 'inbox';
 
   const [selectedListId, setSelectedListId] = useState(defaultListId);
 
@@ -107,6 +103,8 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
 
   const resetForm = () => {
     setTitle('');
+    setPlannedDate(currentViewForPlan());
+    setSaveError('');
     setPriority(0);
     setDueDate(undefined);
     setDueTime(null);
@@ -137,7 +135,11 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!title.trim()) return;
+    if (!title.trim() || savingRef.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    onSavingChange?.(true);
+    setSaveError('');
 
     try {
       await createTask({
@@ -145,18 +147,25 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
         title: title.trim(),
         priority,
         dueDate: combinedDueDate,
+        plannedDate: plannedDate || undefined,
         tags: selectedTags.length > 0 ? selectedTags : undefined,
         attachments: attachments.length > 0 ? attachments : undefined,
       });
 
       resetForm();
+      onSavingChange?.(false);
       setExpanded(false);
     } catch (error) {
-      console.error('Failed to create task:', error);
+      setSaveError('任务未能保存，输入已保留，请重试。');
+    } finally {
+      savingRef.current = false;
+      setSaving(false);
+      onSavingChange?.(false);
     }
   };
 
   const handleClose = () => {
+    if (savingRef.current) return;
     resetForm();
     setExpanded(false);
   };
@@ -178,7 +187,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
 
       appendAttachments(picked);
     } catch (error) {
-      console.error('Failed to pick attachments:', error);
+      setSaveError('附件未能读取，请重新选择文件。');
     }
   };
 
@@ -206,7 +215,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
         appendAttachments([attachment]);
       }
     } catch (error) {
-      console.error('Failed to paste clipboard image:', error);
+      setSaveError('图片未能粘贴，请重试。');
     }
   };
 
@@ -215,7 +224,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
   };
 
   const formatDisplayDate = () => {
-    if (!dueDate) return '日期';
+    if (!dueDate) return '截止日期';
 
     let dateText = '';
     if (isToday(dueDate)) {
@@ -232,7 +241,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
         .padStart(2, '0')}`;
     }
 
-    return dateText;
+    return '截止：' + dateText;
   };
 
   const priorityColors: Record<Priority, string> = {
@@ -260,14 +269,18 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
   return (
     <form
       onSubmit={handleSubmit}
+      aria-busy={saving}
       onPasteCapture={(event) => void handlePasteAttachment(event)}
       className={cn('rounded-lg border bg-background p-3 shadow-sm', className)}
     >
+      <fieldset disabled={saving} className="min-w-0">
       <Input
+        aria-label="新任务标题"
         ref={inputRef}
         value={title}
         onChange={(event) => setTitle(event.target.value)}
         onKeyDown={(event) => {
+          if (event.key === 'Enter' && event.nativeEvent.isComposing) event.preventDefault();
           if (event.key === 'Escape') {
             handleClose();
           }
@@ -276,6 +289,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
         className="h-auto border-0 p-0 text-base focus-visible:ring-0"
       />
 
+      <label className="mt-4 flex items-center gap-3 text-xs text-muted-foreground">计划日期<input aria-label="新任务计划日期" type="date" className="detail-small-input" value={plannedDate} onChange={event => setPlannedDate(event.target.value)} /><span>不改变截止日期</span></label>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Popover open={isProjectPopoverOpen} onOpenChange={setIsProjectPopoverOpen}>
           <PopoverTrigger asChild>
@@ -382,7 +396,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
 
         <Popover>
           <PopoverTrigger asChild>
-            <Button type="button" variant="ghost" size="sm" className={cn('h-8', priorityColors[priority])}>
+            <Button type="button" variant="ghost" size="sm" aria-label="设置优先级" className={cn('h-8', priorityColors[priority])}>
               <Flag className="h-4 w-4" />
             </Button>
           </PopoverTrigger>
@@ -471,7 +485,7 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
         </div>
       )}
 
-      <div className="mt-2 text-[11px] text-muted-foreground">Support file picker and Ctrl+V image paste.</div>
+      <div className="mt-2 text-[11px] text-muted-foreground">支持添加文件，也可以按 Ctrl+V 粘贴图片。</div>
 
       <div className="mt-3 flex items-center justify-between gap-2">
         <div className="text-xs text-muted-foreground">
@@ -484,11 +498,15 @@ export function QuickAdd({ className, isOpen, onOpenChange }: QuickAddProps) {
           <Button type="button" variant="ghost" size="sm" onClick={handleClose}>
             取消
           </Button>
-          <Button type="submit" size="sm" disabled={!title.trim()}>
-            添加
+          <Button type="submit" size="sm" disabled={!title.trim() || saving}>
+            {saving ? '正在添加…' : '添加'}
           </Button>
         </div>
       </div>
+      {saveError && <p role="alert" className="mt-3 text-xs text-destructive">{saveError}</p>}
+      </fieldset>
     </form>
   );
 }
+
+function currentViewForPlan() { const ui = useUIStore.getState(); return ui.quickAddPlannedDate ?? (ui.currentView === 'today' ? localDay() : ''); }

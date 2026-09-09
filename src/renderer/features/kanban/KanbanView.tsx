@@ -1,166 +1,79 @@
-import React, { useMemo } from 'react';
-import { Plus } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { cn } from '@/lib/utils';
+import { useCallback, useDeferredValue, useMemo, useRef, useState } from 'react';
+import { DndContext, DragOverlay, PointerSensor, useDraggable, useDroppable, useSensor, useSensors } from '@dnd-kit/core';
+import { GripVertical, Plus, Search, X } from 'lucide-react';
+import { useWorkspaceTasks } from '@/features/tasks/use-workspace-tasks';
 import { useTaskStore } from '@/features/tasks/store';
 import { useUIStore } from '@/features/settings/uiStore';
-import { TaskContextMenu } from '@/features/tasks/components';
+import { TaskContextMenu } from '@/features/tasks/components/TaskContextMenu';
+import { TaskCard, statusNames } from '@/features/tasks/components/TaskCard';
+import { VirtualCardList } from '@/features/tasks/components/VirtualCardList';
+import { TaskViewFeedback } from '@/features/tasks/components/TaskViewFeedback';
+import { groupBoardTasks } from './kanban-model';
 import type { Task, TaskStatus } from '../../../../types/models';
 
-interface KanbanColumn {
-  id: TaskStatus | 'all';
-  title: string;
-  color: string;
+const statuses: TaskStatus[] = ['todo', 'done', 'canceled'];
+
+
+function BoardCard({ task, busy, onMove }: { task: Task; busy: boolean; onMove: (id: string, status: TaskStatus) => void }) {
+  const { setNodeRef, listeners, attributes, isDragging } = useDraggable({ id: task.id, disabled: busy });
+  const select = useUIStore(s => s.selectTask);
+  return <div ref={setNodeRef} className={isDragging ? 'board-card-dragging' : undefined}>
+    <TaskContextMenu task={task}><div>
+      <TaskCard task={task} onOpen={() => select(task.id)} actions={<>
+        <select aria-label={'更改状态：' + task.title} value={task.status} disabled={busy}
+          onChange={event => onMove(task.id, event.target.value as TaskStatus)}>
+          {statuses.map(status => <option key={status} value={status}>{statusNames[status]}</option>)}
+        </select>
+        <button type="button" className="board-drag-handle" aria-label={'拖动任务：' + task.title} disabled={busy} {...attributes} {...listeners}><GripVertical size={15} /></button>
+      </>} />
+    </div></TaskContextMenu>
+  </div>;
 }
-
-const columns: KanbanColumn[] = [
-  { id: 'todo', title: '待办', color: 'bg-blue-500' },
-  { id: 'done', title: '已完成', color: 'bg-green-500' },
-  { id: 'canceled', title: '已取消', color: 'bg-gray-500' },
-];
-
+function BoardColumn({ status, tasks, activeId, pending, onMove, searching }: {
+  status: TaskStatus; tasks: Task[]; activeId: string | null; pending: Set<string>;
+  onMove: (id: string, status: TaskStatus) => void; searching: boolean;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: status });
+  return <section ref={setNodeRef} className={'board-column status-' + status + (isOver ? ' is-over' : '')} data-board-column={status} aria-label={statusNames[status]}>
+    <header className="board-column-header"><span className="board-status-dot" /><h2>{statusNames[status]}</h2><span className="board-count">{tasks.length}</span>
+      {status === 'todo' && <button type="button" aria-label="添加待办任务" onClick={() => useUIStore.getState().openQuickAdd()}><Plus size={17} /></button>}
+    </header>
+    {tasks.length ? <VirtualCardList tasks={tasks} activeId={activeId} label={statusNames[status] + '任务'}
+      renderTask={task => <BoardCard task={task} busy={pending.has(task.id)} onMove={onMove} />} />
+      : <div className="board-empty"><span>{searching ? '没有匹配的任务' : status === 'todo' ? '从一件小事开始' : status === 'done' ? '完成的任务会留在这里' : '已取消的任务会留在这里'}</span>
+        {status === 'todo' && !searching && <button onClick={() => useUIStore.getState().openQuickAdd()}><Plus size={14} />添加任务</button>}</div>}
+  </section>;
+}
 export function KanbanView() {
-  const { tasks, updateTask } = useTaskStore();
-  const { selectTask, openQuickAdd, setCurrentView } = useUIStore();
+  const tasks = useWorkspaceTasks();
+  const [query, setQuery] = useState('');
+  const deferredQuery = useDeferredValue(query);
+  const groups = useMemo(() => groupBoardTasks(tasks, deferredQuery), [tasks, deferredQuery]);
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const [pending, setPending] = useState(new Set<string>());
+  const pendingRef = useRef(new Set<string>());
+  const [message, setMessage] = useState('');
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const move = useCallback(async (id: string, status: TaskStatus, restoreCompletedAt?: string) => {
+    const task = useTaskStore.getState().tasks.find(task => task.id === id);
+    if (!task || task.status === status || pendingRef.current.has(id)) return;
+    pendingRef.current.add(id); setPending(new Set(pendingRef.current)); setMessage('');
+    try {
+      await useTaskStore.getState().updateTask(id, { status, restoreCompletedAt });
 
-  const tasksByStatus = useMemo(() => {
-    const map = new Map<string, Task[]>();
-    columns.forEach((column) => map.set(column.id, []));
 
-    tasks.forEach((task) => {
-      const existing = map.get(task.status) || [];
-      map.set(task.status, [...existing, task]);
-    });
-
-    return map;
-  }, [tasks]);
-
-  const handleDragStart = (event: React.DragEvent, taskId: string) => {
-    event.dataTransfer.setData('taskId', taskId);
-    event.dataTransfer.effectAllowed = 'move';
-  };
-
-  const handleDragOver = (event: React.DragEvent) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDrop = async (event: React.DragEvent, status: TaskStatus) => {
-    event.preventDefault();
-    const taskId = event.dataTransfer.getData('taskId');
-    if (taskId) {
-      await updateTask(taskId, { status });
-    }
-  };
-
-  const getPriorityColor = (priority: number) => {
-    switch (priority) {
-      case 3:
-        return 'border-l-red-500';
-      case 2:
-        return 'border-l-yellow-500';
-      case 1:
-        return 'border-l-blue-500';
-      default:
-        return 'border-l-transparent';
-    }
-  };
-
-  const handleOpenQuickAdd = () => {
-    setCurrentView('inbox');
-    openQuickAdd();
-  };
-
-  return (
-    <div className="flex-1 w-full h-full p-4 overflow-auto">
-      <div className="grid grid-cols-3 gap-4 h-full min-h-0">
-        {columns.map((column) => {
-          const columnTasks = tasksByStatus.get(column.id) || [];
-
-          return (
-            <div
-              key={column.id}
-              className="flex flex-col bg-muted/30 rounded-lg min-h-0 overflow-hidden"
-              onDragOver={handleDragOver}
-              onDrop={(event) => void handleDrop(event, column.id as TaskStatus)}
-            >
-              <div className="flex items-center justify-between p-3 border-b flex-shrink-0">
-                <div className="flex items-center gap-2">
-                  <div className={cn('w-3 h-3 rounded-full', column.color)} />
-                  <span className="font-medium">{column.title}</span>
-                  <span className="text-sm text-muted-foreground">
-                    {columnTasks.length}
-                  </span>
-                </div>
-                {column.id === 'todo' && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-6 w-6"
-                    onClick={handleOpenQuickAdd}
-                  >
-                    <Plus className="h-4 w-4" />
-                  </Button>
-                )}
-              </div>
-
-              <ScrollArea className="flex-1 p-2">
-                <div className="space-y-2">
-                  {columnTasks.map((task) => (
-                    <TaskContextMenu key={task.id} task={task}>
-                      <div
-                        draggable
-                        onDragStart={(event) => handleDragStart(event, task.id)}
-                        onClick={() => selectTask(task.id)}
-                        className={cn(
-                          'bg-background rounded-lg p-3 shadow-sm border border-l-4 cursor-pointer',
-                          'hover:shadow-md transition-shadow',
-                          getPriorityColor(task.priority)
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <h4
-                            className={cn(
-                              'text-sm font-medium',
-                              task.status === 'done' && 'line-through text-muted-foreground'
-                            )}
-                          >
-                            {task.title}
-                          </h4>
-                        </div>
-
-                        {task.notes && (
-                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                            {task.notes}
-                          </p>
-                        )}
-
-                        <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
-                          {task.dueDate && (
-                            <span>
-                              {new Date(task.dueDate).toLocaleDateString('zh-CN', {
-                                month: 'short',
-                                day: 'numeric',
-                              })}
-                            </span>
-                          )}
-                          {task.subtasks && task.subtasks.length > 0 && (
-                            <span>
-                              {task.subtasks.filter((subtask) => subtask.isDone).length}/
-                              {task.subtasks.length}
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    </TaskContextMenu>
-                  ))}
-                </div>
-              </ScrollArea>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+    } catch { setMessage('状态未能更新，任务已保留，请重试。'); }
+    finally { pendingRef.current.delete(id); setPending(new Set(pendingRef.current)); }
+  }, []);
+  const activeTask = tasks.find(task => task.id === activeId);
+  return <div className="board-view">
+    <div className="view-toolbar"><p>按状态整理，一步步推进。</p><label className="view-search"><Search size={15} /><input aria-label="筛选当前看板任务" placeholder="筛选当前看板…" value={query} onChange={event => setQuery(event.target.value)} />{query && <button aria-label="清除看板筛选" onClick={() => setQuery('')}><X size={14} /></button>}</label></div>
+    <TaskViewFeedback />
+    {message && <div role="status" className="board-feedback"><span>{message}</span><button aria-label="关闭状态提示" onClick={() => { setMessage(''); }}><X size={14} /></button></div>}
+    <DndContext sensors={sensors} onDragStart={event => setActiveId(String(event.active.id))} onDragCancel={() => setActiveId(null)}
+      onDragEnd={event => { setActiveId(null); if (event.over && statuses.includes(event.over.id as TaskStatus)) void move(String(event.active.id), event.over.id as TaskStatus); }}>
+      <div className="board-columns">{statuses.map(status => <BoardColumn key={status} status={status} tasks={groups[status]} activeId={activeId} pending={pending} onMove={(id, next) => void move(id, next)} searching={!!deferredQuery.trim()} />)}</div>
+      <DragOverlay dropAnimation={null}>{activeTask && <div className="board-drag-preview"><TaskCard task={activeTask} onOpen={() => {}} /></div>}</DragOverlay>
+    </DndContext>
+  </div>;
 }

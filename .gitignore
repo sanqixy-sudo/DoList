@@ -49,3 +49,6 @@ npm-debug.log*
 一键提交推送.bat
 git-sync.ps1
 启动软件测试.bat
+
+# Local verification artifacts and isolated test data
+.audit/

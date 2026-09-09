@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import { safeIpc as ipcMain } from './validated-ipc';
+
 import { projectGroupRepo } from '../db/repositories';
 import { IPC_CHANNELS } from '../../../types/ipc';
 import type { CreateProjectGroupDto, ProjectGroup } from '../../../types/models';

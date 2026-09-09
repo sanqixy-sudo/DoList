@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import { safeIpc as ipcMain } from './validated-ipc';
+
 import { tagRepo } from '../db/repositories';
 import { IPC_CHANNELS } from '../../../types/ipc';
 import type { Tag } from '../../../types/models';

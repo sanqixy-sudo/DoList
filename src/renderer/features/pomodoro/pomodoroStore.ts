@@ -1,250 +1,119 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { createJSONStorage, persist } from 'zustand/middleware';
 
 type PomodoroPhase = 'work' | 'shortBreak' | 'longBreak';
 type PomodoroStatus = 'idle' | 'running' | 'paused';
-
 interface PomodoroSettings {
-  workDuration: number; // minutes
-  shortBreakDuration: number;
-  longBreakDuration: number;
-  longBreakInterval: number; // after how many work sessions
-  autoStartBreaks: boolean;
-  autoStartWork: boolean;
+  workDuration: number; shortBreakDuration: number; longBreakDuration: number;
+  longBreakInterval: number; autoStartBreaks: boolean; autoStartWork: boolean;
 }
-
 interface PomodoroState {
-  // Current session
-  status: PomodoroStatus;
-  phase: PomodoroPhase;
-  timeRemaining: number; // seconds
-  currentTaskId: string | null;
-
-  // Pause confirmation
-  showPauseConfirm: boolean;
-
-  // Statistics
-  completedPomodoros: number;
-  totalWorkTime: number; // seconds
-  todayPomodoros: number;
-  todayWorkTime: number;
-  lastResetDate: string;
-
-  // Settings
+  status: PomodoroStatus; phase: PomodoroPhase; timeRemaining: number;
+  deadline: number | null; sessionDuration: number; currentTaskId: string | null;
+  showPauseConfirm: boolean; completedPomodoros: number; totalWorkTime: number;
+  todayPomodoros: number; todayWorkTime: number; lastResetDate: string;
   settings: PomodoroSettings;
-
-  // Actions
-  start: () => void;
-  pause: () => void;
-  resume: () => void;
-  reset: () => void;
-  skip: () => void;
-  tick: () => void;
-  setTaskId: (taskId: string | null) => void;
+  start: () => void; pause: () => void; resume: () => void; reset: () => void;
+  skip: () => void; tick: () => void; setTaskId: (id: string | null) => void;
   updateSettings: (settings: Partial<PomodoroSettings>) => void;
-  confirmPause: () => void;
-  dismissPauseConfirm: () => void;
+  confirmPause: () => void; dismissPauseConfirm: () => void;
 }
-
 const DEFAULT_SETTINGS: PomodoroSettings = {
-  workDuration: 25,
-  shortBreakDuration: 5,
-  longBreakDuration: 15,
-  longBreakInterval: 4,
-  autoStartBreaks: false,
-  autoStartWork: false,
+  workDuration: 25, shortBreakDuration: 5, longBreakDuration: 15,
+  longBreakInterval: 4, autoStartBreaks: false, autoStartWork: false,
 };
-
-export const usePomodoroStore = create<PomodoroState>()(
-  persist(
-    (set, get) => ({
-      status: 'idle',
-      phase: 'work',
-      timeRemaining: DEFAULT_SETTINGS.workDuration * 60,
-      currentTaskId: null,
-      showPauseConfirm: false,
-      completedPomodoros: 0,
-      totalWorkTime: 0,
-      todayPomodoros: 0,
-      todayWorkTime: 0,
-      lastResetDate: new Date().toDateString(),
-      settings: DEFAULT_SETTINGS,
-
-      start: () => {
-        const state = get();
-        // Check if we need to reset daily stats
-        const today = new Date().toDateString();
-        if (state.lastResetDate !== today) {
-          set({
-            todayPomodoros: 0,
-            todayWorkTime: 0,
-            lastResetDate: today,
-          });
-        }
-        set({ status: 'running' });
-      },
-
-      pause: () => {
-        const { currentTaskId } = get();
-        // Always pause the timer first
-        set({ status: 'paused' });
-        if (currentTaskId) {
-          // Show confirmation dialog if there's a task
-          set({ showPauseConfirm: true });
-        }
-      },
-
-      confirmPause: () => set({ showPauseConfirm: false }),
-
-      dismissPauseConfirm: () => set({ showPauseConfirm: false }),
-
-      resume: () => set({ status: 'running' }),
-
-      reset: () => {
-        const { settings } = get();
-        set({
-          status: 'idle',
-          phase: 'work',
-          timeRemaining: settings.workDuration * 60,
-        });
-      },
-
-      skip: () => {
-        const state = get();
-        const { settings } = state;
-
-        let nextPhase: PomodoroPhase;
-        let nextDuration: number;
-
-        if (state.phase === 'work') {
-          // Determine if it's time for a long break
-          const nextPomodoroCount = state.completedPomodoros + 1;
-          if (nextPomodoroCount % settings.longBreakInterval === 0) {
-            nextPhase = 'longBreak';
-            nextDuration = settings.longBreakDuration;
-          } else {
-            nextPhase = 'shortBreak';
-            nextDuration = settings.shortBreakDuration;
-          }
-        } else {
-          nextPhase = 'work';
-          nextDuration = settings.workDuration;
-        }
-
-        set({
-          phase: nextPhase,
-          timeRemaining: nextDuration * 60,
-          status: 'idle',
-        });
-      },
-
-      tick: () => {
-        const state = get();
-        if (state.status !== 'running') return;
-
-        const newTimeRemaining = state.timeRemaining - 1;
-
-        if (newTimeRemaining <= 0) {
-          // Phase completed
-          const { settings } = state;
-          let nextPhase: PomodoroPhase;
-          let nextDuration: number;
-          let newCompletedPomodoros = state.completedPomodoros;
-          let newTotalWorkTime = state.totalWorkTime;
-          let newTodayPomodoros = state.todayPomodoros;
-          let newTodayWorkTime = state.todayWorkTime;
-
-          if (state.phase === 'work') {
-            // Work session completed
-            newCompletedPomodoros += 1;
-            newTodayPomodoros += 1;
-            newTotalWorkTime += settings.workDuration * 60;
-            newTodayWorkTime += settings.workDuration * 60;
-
-            // Show notification
-            if (Notification.permission === 'granted') {
-              new Notification('DoList 番茄钟', {
-                body: '工作时间结束！休息一下吧。',
-              });
-            }
-
-            // Determine break type
-            if (newCompletedPomodoros % settings.longBreakInterval === 0) {
-              nextPhase = 'longBreak';
-              nextDuration = settings.longBreakDuration;
-            } else {
-              nextPhase = 'shortBreak';
-              nextDuration = settings.shortBreakDuration;
-            }
-          } else {
-            // Break completed
-            nextPhase = 'work';
-            nextDuration = settings.workDuration;
-
-            if (Notification.permission === 'granted') {
-              new Notification('DoList 番茄钟', {
-                body: '休息结束！开始新的工作吧。',
-              });
-            }
-          }
-
-          const shouldAutoStart =
-            (nextPhase === 'work' && settings.autoStartWork) ||
-            (nextPhase !== 'work' && settings.autoStartBreaks);
-
-          set({
-            phase: nextPhase,
-            timeRemaining: nextDuration * 60,
-            status: shouldAutoStart ? 'running' : 'idle',
-            completedPomodoros: newCompletedPomodoros,
-            totalWorkTime: newTotalWorkTime,
-            todayPomodoros: newTodayPomodoros,
-            todayWorkTime: newTodayWorkTime,
-          });
-        } else {
-          set({ timeRemaining: newTimeRemaining });
-        }
-      },
-
-      setTaskId: (taskId: string | null) => set({ currentTaskId: taskId }),
-
-      updateSettings: (newSettings: Partial<PomodoroSettings>) => {
-        const state = get();
-        const updatedSettings = { ...state.settings, ...newSettings };
-
-        // If idle, update time remaining based on new settings
-        if (state.status === 'idle') {
-          let newDuration: number;
-          switch (state.phase) {
-            case 'work':
-              newDuration = updatedSettings.workDuration;
-              break;
-            case 'shortBreak':
-              newDuration = updatedSettings.shortBreakDuration;
-              break;
-            case 'longBreak':
-              newDuration = updatedSettings.longBreakDuration;
-              break;
-          }
-          set({
-            settings: updatedSettings,
-            timeRemaining: newDuration * 60,
-          });
-        } else {
-          set({ settings: updatedSettings });
-        }
-      },
-    }),
-    {
-      name: 'dolist-pomodoro-storage',
-      partialize: (state) => ({
-        completedPomodoros: state.completedPomodoros,
-        totalWorkTime: state.totalWorkTime,
-        todayPomodoros: state.todayPomodoros,
-        todayWorkTime: state.todayWorkTime,
-        lastResetDate: state.lastResetDate,
-        settings: state.settings,
-      }),
-    }
-  )
-);
+function duration(phase: PomodoroPhase, settings: PomodoroSettings) {
+  return (phase === 'work' ? settings.workDuration : phase === 'shortBreak' ? settings.shortBreakDuration : settings.longBreakDuration) * 60;
+}
+function normalizeSettings(settings: Partial<PomodoroSettings>) {
+  const result = { ...DEFAULT_SETTINGS, ...settings };
+  for (const key of ['workDuration', 'shortBreakDuration', 'longBreakDuration', 'longBreakInterval'] as const) {
+    const value = result[key];
+    result[key] = Number.isFinite(value) ? Math.max(1, Math.min(key === 'longBreakInterval' ? 12 : 180, Math.round(value))) : DEFAULT_SETTINGS[key];
+  }
+  return result;
+}
+function dailyStats(state: PomodoroState) {
+  const today = new Date().toDateString();
+  return state.lastResetDate === today ? {} : { todayPomodoros: 0, todayWorkTime: 0, lastResetDate: today };
+}
+function notify(message: string) {
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') new Notification('DoList 番茄钟', { body: message });
+  } catch { /* Notification availability must not interrupt the timer. */ }
+}
+export const usePomodoroStore = create<PomodoroState>()(persist((set, get) => ({
+  status: 'idle', phase: 'work', timeRemaining: 1500, sessionDuration: 1500, deadline: null,
+  currentTaskId: null, showPauseConfirm: false, completedPomodoros: 0, totalWorkTime: 0,
+  todayPomodoros: 0, todayWorkTime: 0, lastResetDate: new Date().toDateString(), settings: DEFAULT_SETTINGS,
+  start: () => {
+    const state = get();
+    if (state.status === 'running') return;
+    set({ ...dailyStats(state), status: 'running', deadline: Date.now() + state.timeRemaining * 1000, showPauseConfirm: false });
+  },
+  pause: () => {
+    if (get().status !== 'running') return;
+    get().tick();
+    const state = get();
+    if (state.status === 'running') set({ status: 'paused', deadline: null, showPauseConfirm: !!state.currentTaskId });
+  },
+  resume: () => get().start(),
+  confirmPause: () => set({ showPauseConfirm: false }),
+  dismissPauseConfirm: () => set({ showPauseConfirm: false }),
+  reset: () => {
+    const seconds = duration('work', get().settings);
+    set({ status: 'idle', phase: 'work', timeRemaining: seconds, sessionDuration: seconds, deadline: null, showPauseConfirm: false });
+  },
+  skip: () => {
+    const state = get();
+    const phase = state.phase === 'work' ? 'shortBreak' : 'work';
+    const seconds = duration(phase, state.settings);
+    set({ phase, timeRemaining: seconds, sessionDuration: seconds, status: 'idle', deadline: null, showPauseConfirm: false });
+  },
+  tick: () => {
+    let state = get();
+    const daily = dailyStats(state);
+    if (Object.keys(daily).length) { set(daily); state = get(); }
+    if (state.status !== 'running' || state.deadline === null) return;
+    const remaining = Math.max(0, Math.ceil((state.deadline - Date.now()) / 1000));
+    if (remaining > 0) { if (remaining !== state.timeRemaining) set({ timeRemaining: remaining }); return; }
+    const completedWork = state.phase === 'work';
+    const count = state.completedPomodoros + (completedWork ? 1 : 0);
+    const phase: PomodoroPhase = !completedWork ? 'work' : count % state.settings.longBreakInterval === 0 ? 'longBreak' : 'shortBreak';
+    const seconds = duration(phase, state.settings);
+    const autoStart = phase === 'work' ? state.settings.autoStartWork : state.settings.autoStartBreaks;
+    // On wake, finish the elapsed phase once; don't invent unattended work sessions.
+    set({
+      phase, timeRemaining: seconds, sessionDuration: seconds,
+      status: autoStart ? 'running' : 'idle', deadline: autoStart ? Date.now() + seconds * 1000 : null,
+      completedPomodoros: count, totalWorkTime: state.totalWorkTime + (completedWork ? state.sessionDuration : 0),
+      todayPomodoros: state.todayPomodoros + (completedWork ? 1 : 0),
+      todayWorkTime: state.todayWorkTime + (completedWork ? state.sessionDuration : 0),
+    });
+    notify(completedWork ? '工作时间结束！休息一下吧。' : '休息结束！开始新的工作吧。');
+  },
+  setTaskId: currentTaskId => set({ currentTaskId }),
+  updateSettings: input => {
+    const state = get(), settings = normalizeSettings({ ...state.settings, ...input });
+    const seconds = duration(state.phase, settings);
+    set({ settings, ...(state.status === 'idle' ? { timeRemaining: seconds, sessionDuration: seconds } : {}) });
+  },
+}), {
+  name: 'dolist-pomodoro-storage',
+  storage: createJSONStorage(() => ({
+    getItem: key => localStorage.getItem(key),
+    setItem: (key, value) => { if (localStorage.getItem(key) !== value) localStorage.setItem(key, value); },
+    removeItem: key => localStorage.removeItem(key),
+  })),
+  partialize: state => ({
+    completedPomodoros: state.completedPomodoros, totalWorkTime: state.totalWorkTime,
+    todayPomodoros: state.todayPomodoros, todayWorkTime: state.todayWorkTime,
+    lastResetDate: state.lastResetDate, settings: state.settings,
+  }),
+  merge: (persisted, current) => {
+    const saved = persisted as Partial<PomodoroState>;
+    const settings = normalizeSettings(saved.settings ?? {});
+    const state = { ...current, ...saved, settings, timeRemaining: duration('work', settings), sessionDuration: duration('work', settings) };
+    return { ...state, ...dailyStats(state) };
+  },
+}));

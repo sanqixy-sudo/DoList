@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 
-type ViewMode = 'list' | 'calendar';
+export type ViewMode = 'list' | 'calendar' | 'kanban' | 'timeline';
 type Theme = 'light' | 'dark' | 'system';
 type CalendarViewType = 'month' | 'week' | 'day' | 'multiDay' | 'multiWeek';
 
@@ -23,6 +23,7 @@ interface UIState {
     | 'calendar'
     | 'list'
     | 'tag'
+    | 'trash'
     | 'kanban'
     | 'timeline'
     | 'matrix'
@@ -34,6 +35,7 @@ interface UIState {
 
   // Quick add
   isQuickAddOpen: boolean;
+  quickAddPlannedDate: string | null;
 
   // Search
   isSearchOpen: boolean;
@@ -59,6 +61,7 @@ interface UIState {
   setCalendarViewType: (type: CalendarViewType) => void;
   setTheme: (theme: Theme) => void;
   openQuickAdd: () => void;
+  openQuickAddForDate: (date: string) => void;
   closeQuickAdd: () => void;
   toggleQuickAdd: () => void;
   toggleSearch: () => void;
@@ -78,10 +81,11 @@ export const useUIStore = create<UIState>()(
       activeTaskId: null,
       isDetailPanelOpen: false,
       viewMode: 'list',
-      currentView: 'inbox',
+      currentView: 'today',
       calendarViewType: 'month',
       theme: 'system',
       isQuickAddOpen: false,
+      quickAddPlannedDate: null,
       isSearchOpen: false,
       searchQuery: '',
       isPomodoroOpen: false,
@@ -106,7 +110,7 @@ export const useUIStore = create<UIState>()(
 
       setViewMode: (mode: ViewMode) => set({ viewMode: mode }),
 
-      setCurrentView: (view) => set({ currentView: view }),
+      setCurrentView: (view) => set({ currentView: view, viewMode: 'list', activeTaskId: null, isDetailPanelOpen: false }),
 
       setCalendarViewType: (type: CalendarViewType) => set({ calendarViewType: type }),
 
@@ -123,11 +127,13 @@ export const useUIStore = create<UIState>()(
         window.electronAPI.app.setTheme(theme);
       },
 
-      openQuickAdd: () => set({ isQuickAddOpen: true }),
+      openQuickAdd: () => set({ isQuickAddOpen: true, quickAddPlannedDate: null }),
 
-      closeQuickAdd: () => set({ isQuickAddOpen: false }),
+      openQuickAddForDate: date => set({ isQuickAddOpen: true, quickAddPlannedDate: date }),
 
-      toggleQuickAdd: () => set((state) => ({ isQuickAddOpen: !state.isQuickAddOpen })),
+      closeQuickAdd: () => set({ isQuickAddOpen: false, quickAddPlannedDate: null }),
+
+      toggleQuickAdd: () => set((state) => ({ isQuickAddOpen: !state.isQuickAddOpen, quickAddPlannedDate: null })),
 
       toggleSearch: () => set((state) => ({
         isSearchOpen: !state.isSearchOpen,

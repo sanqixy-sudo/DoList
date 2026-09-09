@@ -16,14 +16,32 @@ import type {
 import type { TaskFilter } from '../../types/ipc';
 
 const electronAPI: ElectronAPI = {
+  backup: {
+    cancel: () => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_CANCEL),
+    getProgress: () => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_GET_PROGRESS),
+    onProgress: callback => {
+      const listener = (_event: Electron.IpcRendererEvent, progress: import('../../types/backup').BackupProgress | null) => callback(progress);
+      ipcRenderer.on(IPC_CHANNELS.BACKUP_PROGRESS, listener);
+      return () => { ipcRenderer.removeListener(IPC_CHANNELS.BACKUP_PROGRESS, listener); };
+    },
+    export: () => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_EXPORT),
+    preview: () => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_PREVIEW),
+    restore: token => ipcRenderer.invoke(IPC_CHANNELS.BACKUP_RESTORE, token),
+  },
   tasks: {
     list: (filter?: TaskFilter) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_LIST, filter),
     get: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_GET, id),
     create: (data: CreateTaskDto) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_CREATE, data),
     update: (id: string, data: UpdateTaskDto) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_UPDATE, id, data),
+    undo: token => ipcRenderer.invoke(IPC_CHANNELS.TASKS_UNDO, token),
     delete: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_DELETE, id),
     search: (query: string) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_SEARCH, query),
     reorder: (ids: string[]) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_REORDER, ids),
+    trashList: () => ipcRenderer.invoke(IPC_CHANNELS.TASKS_TRASH_LIST),
+    trash: ids => ipcRenderer.invoke(IPC_CHANNELS.TASKS_TRASH, ids),
+    restore: ids => ipcRenderer.invoke(IPC_CHANNELS.TASKS_RESTORE, ids),
+    purge: ids => ipcRenderer.invoke(IPC_CHANNELS.TASKS_PURGE, ids),
+    bulkUpdate: (ids, data) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_BULK_UPDATE, ids, data),
     pickAttachments: () => ipcRenderer.invoke(IPC_CHANNELS.TASKS_PICK_ATTACHMENTS),
     pasteClipboardImage: () => ipcRenderer.invoke(IPC_CHANNELS.TASKS_PASTE_CLIPBOARD_IMAGE),
     getAttachmentPreviewUrl: (filePath: string) => ipcRenderer.invoke(IPC_CHANNELS.TASKS_GET_ATTACHMENT_PREVIEW_URL, filePath),
@@ -73,6 +91,15 @@ const electronAPI: ElectronAPI = {
   },
 
   app: {
+    scanAttachments: () => ipcRenderer.invoke('app:scanAttachments'),
+    cleanupAttachments: () => ipcRenderer.invoke('app:cleanupAttachments'),
+    getSaveStatus: () => ipcRenderer.invoke(IPC_CHANNELS.APP_SAVE_STATUS),
+    flushDatabase: () => ipcRenderer.invoke(IPC_CHANNELS.APP_FLUSH_DATABASE),
+    onSaveStatus: callback => {
+      const listener = (_event: Electron.IpcRendererEvent, status: import('../../types/ipc').SaveStatus) => callback(status);
+      ipcRenderer.on(IPC_CHANNELS.APP_SAVE_STATUS_CHANGED, listener);
+      return () => { ipcRenderer.removeListener(IPC_CHANNELS.APP_SAVE_STATUS_CHANGED, listener); };
+    },
     getVersion: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_VERSION),
     getTheme: () => ipcRenderer.invoke(IPC_CHANNELS.APP_GET_THEME),
     setTheme: (theme: 'light' | 'dark' | 'system') => ipcRenderer.invoke(IPC_CHANNELS.APP_SET_THEME, theme),
@@ -82,6 +109,11 @@ const electronAPI: ElectronAPI = {
     minimizeToTray: () => ipcRenderer.invoke(IPC_CHANNELS.APP_MINIMIZE_TO_TRAY),
     quit: () => ipcRenderer.invoke(IPC_CHANNELS.APP_QUIT),
     openExternal: (url: string) => ipcRenderer.invoke(IPC_CHANNELS.APP_OPEN_EXTERNAL, url),
+    onResume: callback => {
+      const listener = () => callback();
+      ipcRenderer.on('app:resume', listener);
+      return () => { ipcRenderer.removeListener('app:resume', listener); };
+    },
     onQuickAdd: (callback: () => void) => {
       const listener = () => callback();
       ipcRenderer.on(IPC_CHANNELS.APP_QUICK_ADD, listener);

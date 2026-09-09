@@ -7,6 +7,7 @@ interface ListState {
   activeListId: string | null;
   activeProjectGroupId: string | null;
   isLoading: boolean;
+  error: string | null;
 
   fetchLists: () => Promise<void>;
   fetchProjectGroups: () => Promise<void>;
@@ -26,9 +27,10 @@ export const useListStore = create<ListState>((set, get) => ({
   activeListId: null,
   activeProjectGroupId: 'default-group',
   isLoading: false,
+  error: null,
 
   fetchLists: async () => {
-    set({ isLoading: true });
+    set({ isLoading: true, error: null });
     try {
       const [lists, projectGroups] = await Promise.all([
         window.electronAPI.lists.list(),
@@ -45,8 +47,7 @@ export const useListStore = create<ListState>((set, get) => ({
             : projectGroups[0]?.id ?? null,
       }));
     } catch (error) {
-      console.error('Failed to fetch lists/project groups:', error);
-      set({ isLoading: false });
+      set({ isLoading: false, error: '项目列表加载失败，请重试。' });
     }
   },
 
@@ -61,7 +62,7 @@ export const useListStore = create<ListState>((set, get) => ({
             : projectGroups[0]?.id ?? null,
       }));
     } catch (error) {
-      console.error('Failed to fetch project groups:', error);
+      set({ error: '项目组加载失败，请重试。' });
     }
   },
 

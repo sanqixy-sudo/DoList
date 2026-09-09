@@ -12,6 +12,8 @@ import {
 
 interface PauseConfirmDialogProps {
   open: boolean;
+  error?: string;
+  busy?: boolean;
   onOpenChange: (open: boolean) => void;
   taskTitle: string;
   onComplete: () => void;
@@ -20,13 +22,15 @@ interface PauseConfirmDialogProps {
 
 export function PauseConfirmDialog({
   open,
+  error,
+  busy,
   onOpenChange,
   taskTitle,
   onComplete,
   onContinue,
 }: PauseConfirmDialogProps) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>暂停番茄钟</DialogTitle>
@@ -39,9 +43,11 @@ export function PauseConfirmDialog({
             您是否已完成这个任务？
           </p>
         </div>
+        {error && <p role="alert" className="inline-error">{error}</p>}
         <DialogFooter className="flex-col sm:flex-row gap-2">
           <Button
             variant="outline"
+            disabled={busy}
             onClick={onContinue}
             className="flex-1"
           >
@@ -49,6 +55,7 @@ export function PauseConfirmDialog({
             继续专注
           </Button>
           <Button
+            disabled={busy}
             onClick={onComplete}
             className="flex-1"
           >

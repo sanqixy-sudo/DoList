@@ -1,4 +1,8 @@
-import { app, BrowserWindow, ipcMain, nativeTheme, globalShortcut, shell } from 'electron';
+import { safeIpc as ipcMain } from './ipc/validated-ipc';
+import { backupBusy, cancelBackup } from './backup/coordinator';
+import { registerPersistenceHandlers } from './ipc/persistence';
+import { registerBackupHandlers } from './ipc/backup';
+import { app, BrowserWindow, nativeTheme, globalShortcut, shell, dialog, powerMonitor } from 'electron';
 import path from 'path';
 import { initDatabase, closeDatabase } from './db/client';
 import { registerTaskHandlers } from './ipc/tasks';
@@ -7,7 +11,7 @@ import { registerTagHandlers } from './ipc/tags';
 import { registerSubtaskHandlers } from './ipc/subtasks';
 import { registerReminderHandlers } from './ipc/reminders';
 import { registerProjectGroupHandlers } from './ipc/project-groups';
-import { createTray } from './tray/tray';
+import { createTray, destroyTray } from './tray/tray';
 import { startScheduler, stopScheduler } from './scheduler';
 import { IPC_CHANNELS } from '../../types/ipc';
 
@@ -37,9 +41,12 @@ const createWindow = () => {
     mainWindow?.show();
   });
 
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', event => event.preventDefault());
+
   // Load the app
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:5173');
+  if (process.env.ELECTRON_RENDERER_URL) {
+    mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
     mainWindow.webContents.openDevTools();
   } else {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
@@ -103,10 +110,17 @@ if (!gotTheLock) {
   });
 
   app.whenReady().then(async () => {
+    if (process.platform === 'win32') app.setAppUserModelId('com.dolist.desktop');
     // Initialize database
-    await initDatabase();
+    try { await initDatabase(app.getPath('userData')); }
+    catch (error) {
+      dialog.showErrorBox('无法打开任务数据库', '数据库未能读取或保存，请检查磁盘空间和文件权限。原文件已保留。\n' + String(error));
+      app.exit(1); return;
+    }
 
     // Register IPC handlers
+    registerPersistenceHandlers();
+    registerBackupHandlers();
     registerTaskHandlers();
     registerListHandlers();
     registerProjectGroupHandlers();
@@ -166,6 +180,8 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle(IPC_CHANNELS.APP_OPEN_EXTERNAL, async (_, url: string) => {
+      const protocol = new URL(url).protocol;
+      if (!['https:', 'http:', 'mailto:'].includes(protocol)) throw new Error('不支持的外部链接');
       await shell.openExternal(url);
     });
 
@@ -191,10 +207,13 @@ if (!gotTheLock) {
     registerGlobalShortcuts();
 
     // Setup auto launch
-    setupAutoLaunch();
+    // Preserve the user's existing login-item preference.
 
     // Start reminder scheduler
     startScheduler();
+    powerMonitor.on('resume', () => {
+      mainWindow?.webContents.send('app:resume');
+    });
   });
 
   app.on('window-all-closed', () => {
@@ -214,11 +233,19 @@ if (!gotTheLock) {
   app.on('will-quit', () => {
     // Unregister all shortcuts
     globalShortcut.unregisterAll();
+    destroyTray();
   });
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    if (backupBusy()) { event.preventDefault(); cancelBackup(); mainWindow?.show(); return; }
+    try { closeDatabase(); }
+    catch (error) {
+      event.preventDefault();
+      mainWindow?.show();
+      dialog.showErrorBox('尚有数据未保存', '已取消退出。请检查磁盘空间和文件权限，然后重试保存，或在设置中导出备份。\n' + String(error));
+      return;
+    }
     isQuitting = true;
     stopScheduler();
-    closeDatabase();
   });
 }

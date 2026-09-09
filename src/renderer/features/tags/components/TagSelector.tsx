@@ -26,10 +26,11 @@ const TAG_COLORS = [
 ];
 
 export function TagSelector({ selectedTagIds, onChange, className }: TagSelectorProps) {
-  const { tags, fetchTags, createTag, deleteTag } = useTagStore();
+  const { tags, fetchTags, createTag, deleteTag, error, isLoading } = useTagStore();
   const [isOpen, setIsOpen] = useState(false);
   const [searchValue, setSearchValue] = useState('');
   const [isCreating, setIsCreating] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen && tags.length === 0) {
@@ -62,7 +63,7 @@ export function TagSelector({ selectedTagIds, onChange, className }: TagSelector
       onChange([...selectedTagIds, newTag.id]);
       setSearchValue('');
     } catch (error) {
-      console.error('Failed to create tag:', error);
+      // The store keeps the failure visible and leaves the input intact.
     } finally {
       setIsCreating(false);
     }
@@ -93,6 +94,7 @@ export function TagSelector({ selectedTagIds, onChange, className }: TagSelector
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-64 p-2" align="start">
+        {error && <div role="alert" className="inline-error mb-2">{error}<button type="button" className="ml-2 underline" onClick={() => void fetchTags()} disabled={isLoading}>重新加载</button></div>}
         {/* Search / Create Input */}
         <div className="mb-2">
           <Input
@@ -125,6 +127,7 @@ export function TagSelector({ selectedTagIds, onChange, className }: TagSelector
                 <button
                   type="button"
                   onClick={(e) => handleRemoveTag(tag.id, e)}
+                  aria-label={`移除标签 ${tag.name}`}
                   className="hover:opacity-70"
                 >
                   <X className="h-3 w-3" />
@@ -135,7 +138,7 @@ export function TagSelector({ selectedTagIds, onChange, className }: TagSelector
         )}
 
         {/* Tag List */}
-        <ScrollArea className="max-h-48">
+        <ScrollArea className="h-48">
           <div className="space-y-1">
             {filteredTags.map((tag) => (
               <div
@@ -144,6 +147,8 @@ export function TagSelector({ selectedTagIds, onChange, className }: TagSelector
                 onClick={() => handleToggleTag(tag.id)}
               >
                 <Checkbox
+                  aria-label={`选择标签 ${tag.name}`}
+                  onCheckedChange={() => handleToggleTag(tag.id)}
                   checked={selectedTagIds.includes(tag.id)}
                   onClick={(e) => e.stopPropagation()}
                 />
@@ -155,16 +160,19 @@ export function TagSelector({ selectedTagIds, onChange, className }: TagSelector
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
-                  onClick={(e) => {
+                  className="h-6 w-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+                  aria-label={`删除标签 ${tag.name}`}
+                  disabled={deletingId !== null}
+                  onClick={async (e) => {
                     e.stopPropagation();
                     // Optional: Add custom dialog instead of window.confirm if preferred, but confirm is safe here
                     if (window.confirm(`确定要删除标签 "${tag.name}" 吗？`)) {
-                      deleteTag(tag.id);
-                      // Also remove from selection if selected
-                      if (selectedTagIds.includes(tag.id)) {
-                        onChange(selectedTagIds.filter((id) => id !== tag.id));
-                      }
+                      setDeletingId(tag.id);
+                      try {
+                        await deleteTag(tag.id);
+                        if (selectedTagIds.includes(tag.id)) onChange(selectedTagIds.filter(id => id !== tag.id));
+                      } catch { /* Keep the selection and show the store error. */ }
+                      finally { setDeletingId(null); }
                     }
                   }}
                 >

@@ -1,4 +1,5 @@
-import { ipcMain } from 'electron';
+import { safeIpc as ipcMain } from './validated-ipc';
+
 import { listRepo } from '../db/repositories';
 import { IPC_CHANNELS } from '../../../types/ipc';
 import type { CreateListDto, List } from '../../../types/models';

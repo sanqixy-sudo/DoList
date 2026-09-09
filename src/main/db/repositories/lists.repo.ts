@@ -1,5 +1,5 @@
-import { dbRun, dbGet, dbAll } from '../client';
-import { v4 as uuidv4 } from 'uuid';
+import { dbRun, dbGet, dbAll, dbTransaction } from '../client';
+import { randomUUID as uuidv4 } from 'node:crypto';
 import type { List, CreateListDto } from '../../../../types/models';
 
 export const listRepo = {
@@ -69,7 +69,11 @@ export const listRepo = {
     if (id === 'inbox') {
       throw new Error('Cannot delete inbox');
     }
-    dbRun('DELETE FROM lists WHERE id = ?', [id]);
+    dbTransaction(() => {
+      const now = new Date().toISOString();
+      dbRun("UPDATE tasks SET list_id = 'inbox', deleted_at = COALESCE(deleted_at, ?), updated_at = ? WHERE list_id = ?", [now, now, id]);
+      dbRun('DELETE FROM lists WHERE id = ?', [id]);
+    });
   },
 
   reorder(ids: string[]): void {

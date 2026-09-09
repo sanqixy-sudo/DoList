@@ -1,0 +1,11 @@
+const path = require('node:path');
+const fs = require('node:fs');
+const { spawnSync } = require('node:child_process');
+process.chdir(path.resolve(__dirname, '..'));
+fs.mkdirSync('.audit', { recursive: true });
+require('esbuild').buildSync({ entryPoints: ['tests/performance-benchmark.ts'], outfile: '.audit/benchmark.cjs', bundle: true, platform: 'node', format: 'cjs', external: ['electron', 'sql.js'], logLevel: 'warning' });
+const env = { ...process.env };
+delete env.ELECTRON_RUN_AS_NODE;
+const result = spawnSync(require('electron'), ['.audit/benchmark.cjs', 'current'], { env, stdio: 'inherit', windowsHide: true, timeout: 130000 });
+if (result.error) console.error(result.error);
+process.exit(result.status ?? 1);

@@ -71,7 +71,9 @@ export const matrixQuadrants: MatrixQuadrant[] = [
   },
 ];
 
-export function getMatrixQuadrantUpdates(quadrantId: MatrixQuadrantId): Pick<UpdateTaskDto, 'priority' | 'dueDate'> {
+export function getMatrixQuadrantUpdates(quadrantId: MatrixQuadrantId, task?: Task): Pick<UpdateTaskDto, 'priority' | 'dueDate'> {
+  const urgent = quadrantId === 'urgent-important' || quadrantId === 'urgent-not-important';
+  if (task && isUrgent(task) === urgent) return { priority: quadrantId.endsWith('-not-important') ? (urgent ? 1 : 0) : 3 };
   switch (quadrantId) {
     case 'urgent-important':
       return { priority: 3, dueDate: getUrgentDueDate() };
@@ -107,4 +109,15 @@ export function formatMatrixTaskMeta(task: Task): string {
   }
 
   return pieces.join(' · ');
+}
+
+// Moving urgency can change a real deadline; disclose the exact change first.
+export function confirmMatrixMove(task: Task, quadrantId: MatrixQuadrantId) {
+  const updates = getMatrixQuadrantUpdates(quadrantId, task);
+  if ('dueDate' in updates && updates.dueDate !== task.dueDate) {
+    const before = task.dueDate ? new Date(task.dueDate).toLocaleString('zh-CN') : '未设置';
+    const after = updates.dueDate ? new Date(updates.dueDate).toLocaleString('zh-CN') : '清除截止时间';
+    if (!window.confirm('移动任务“' + task.title + '”会同时修改优先级和截止时间：\n' + before + ' → ' + after + '。\n计划日期保持不变，是否继续？')) return null;
+  }
+  return updates;
 }

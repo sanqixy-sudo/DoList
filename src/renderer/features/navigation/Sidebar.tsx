@@ -1,435 +1,70 @@
 import { useMemo, useState } from 'react';
-import {
-  BarChart3,
-  Calendar,
-  CalendarDays,
-  ChevronDown,
-  ChevronRight,
-  Columns,
-  FolderOpen,
-  FolderTree,
-  GanttChart,
-  Grid3X3,
-  Inbox,
-  MoreHorizontal,
-  Plus,
-  Search,
-  Settings,
-  Sun,
-  Timer,
-  Trash2,
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { cn } from '@/lib/utils';
+import { Check, ChevronDown, ChevronRight, Sun, Inbox, CalendarDays, Folder, Plus, Search, Settings, Timer, Grid2X2, BarChart3, MoreHorizontal, Trash2 } from 'lucide-react';
 import { useUIStore } from '@/features/settings/uiStore';
+import { useTaskStore } from '@/features/tasks/store';
+import { isTodayTask } from '@/features/tasks/task-selectors';
+import { useLocalDay } from '@/features/tasks/use-workspace-tasks';
 import { useListStore } from './listStore';
+import { Button } from '@/components/ui/button';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { cn } from '@/lib/utils';
 
-interface SidebarProps {
-  className?: string;
-}
-
-const UNGROUPED_ID = '__ungrouped__';
-
-export function Sidebar({ className }: SidebarProps) {
-  const {
-    currentView,
-    setCurrentView,
-    isSidebarOpen,
-    toggleSearch,
-    togglePomodoro,
-    toggleSettings,
-  } = useUIStore();
-  const {
-    lists,
-    projectGroups,
-    activeListId,
-    activeProjectGroupId,
-    setActiveList,
-    setActiveProjectGroup,
-    createList,
-    deleteList,
-    createProjectGroup,
-    deleteProjectGroup,
-  } = useListStore();
-
-  const [isProjectGroupsExpanded, setIsProjectGroupsExpanded] = useState(true);
-  const [isViewsExpanded, setIsViewsExpanded] = useState(true);
-  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
-  const [creatingProjectForGroupId, setCreatingProjectForGroupId] = useState<string | null>(null);
-  const [newProjectName, setNewProjectName] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
-    'default-group': true,
-    [UNGROUPED_ID]: true,
-  });
-
-  const projectGroupsWithProjects = useMemo(() => {
-    const nonInboxLists = lists.filter((list) => list.id !== 'inbox');
-    const grouped = projectGroups.map((group) => ({
-      id: group.id,
-      name: group.name,
-      color: group.color,
-      isBuiltIn: group.id === 'default-group',
-      projects: nonInboxLists.filter((list) => list.groupId === group.id),
-    }));
-
-    const ungroupedProjects = nonInboxLists.filter((list) => !list.groupId);
-    if (ungroupedProjects.length > 0) {
-      grouped.push({
-        id: UNGROUPED_ID,
-        name: '未分组',
-        color: '#64748b',
-        isBuiltIn: true,
-        projects: ungroupedProjects,
-      });
-    }
-
-    return grouped;
-  }, [lists, projectGroups]);
-
-  const smartLists = [
-    { id: 'inbox', icon: Inbox, label: '收件箱', view: 'inbox' as const },
-    { id: 'today', icon: Sun, label: '今天', view: 'today' as const },
-    { id: 'upcoming', icon: CalendarDays, label: '即将到来', view: 'upcoming' as const },
-    { id: 'calendar', icon: Calendar, label: '日历', view: 'calendar' as const },
-  ];
-
-  const viewModes = [
-    { id: 'kanban', icon: Columns, label: '看板', view: 'kanban' as const },
-    { id: 'timeline', icon: GanttChart, label: '时间线', view: 'timeline' as const },
-    { id: 'matrix', icon: Grid3X3, label: '四象限', view: 'matrix' as const },
-    { id: 'project-report', icon: BarChart3, label: '项目报告', view: 'project-report' as const },
-  ];
-
-  const handleCreateGroup = async () => {
-    if (!newGroupName.trim()) {
-      setIsCreatingGroup(false);
-      setNewGroupName('');
-      return;
-    }
-
-    const created = await createProjectGroup({ name: newGroupName.trim() });
-    setExpandedGroups((state) => ({ ...state, [created.id]: true }));
-    setNewGroupName('');
-    setIsCreatingGroup(false);
+export function Sidebar() {
+  const open = useUIStore(s => s.isSidebarOpen);
+  const view = useUIStore(s => s.currentView);
+  const navigate = useUIStore(s => s.setCurrentView);
+  const lists = useListStore(s => s.lists);
+  const listError = useListStore(s => s.error);
+  const groups = useListStore(s => s.projectGroups);
+  const active = useListStore(s => s.activeListId);
+  const tasks = useTaskStore(s => s.tasks);
+  const today = useLocalDay();
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [more, setMore] = useState(false);
+  const [creating, setCreating] = useState<{ kind: 'group' | 'project'; groupId?: string } | null>(null);
+  const [name, setName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const counts = useMemo(() => ({ today: tasks.filter(t => isTodayTask(t, today)).length, inbox: tasks.filter(t => t.listId === 'inbox' && t.status === 'todo').length }), [tasks, today]);
+  const sections = [...groups.map(g => ({ ...g, projects: lists.filter(l => l.id !== 'inbox' && l.groupId === g.id) })), { id: '__ungrouped__', name: '未分组', color: null, projects: lists.filter(l => l.id !== 'inbox' && !l.groupId) }].filter(g => g.id !== '__ungrouped__' || g.projects.length);
+  const beginCreate = (kind: 'group' | 'project', groupId?: string) => { setCreating({ kind, groupId }); setName(''); setError(''); };
+  const create = async (event: React.FormEvent) => {
+    event.preventDefault(); if (!creating || busy || !name.trim()) return; setBusy(true); setError('');
+    try {
+      if (creating.kind === 'group') { const group = await useListStore.getState().createProjectGroup({ name: name.trim() }); setExpanded(s => ({ ...s, [group.id]: true })); }
+      else { const list = await useListStore.getState().createList({ name: name.trim(), groupId: creating.groupId ?? 'default-group' }); useListStore.getState().setActiveList(list.id); navigate('list'); }
+      setCreating(null); setName('');
+    } catch { setError('未能创建，请重试。'); } finally { setBusy(false); }
   };
-
-  const handleCreateProject = async () => {
-    const targetGroupId =
-      creatingProjectForGroupId && creatingProjectForGroupId !== UNGROUPED_ID
-        ? creatingProjectForGroupId
-        : null;
-
-    if (!newProjectName.trim()) {
-      setCreatingProjectForGroupId(null);
-      setNewProjectName('');
-      return;
-    }
-
-    const created = await createList({
-      name: newProjectName.trim(),
-      groupId: targetGroupId ?? activeProjectGroupId ?? 'default-group',
-    });
-
-    setActiveList(created.id);
-    setCurrentView('list');
-    setCreatingProjectForGroupId(null);
-    setNewProjectName('');
+  const remove = async (kind: 'project' | 'group', id: string, label: string) => {
+    if (!window.confirm(kind === 'project' ? '删除项目“' + label + '”？项目本身无法恢复，其中任务移入回收站，恢复后归入收件箱。' : '删除项目组“' + label + '”？其中项目将移到默认项目组。')) return;
+    try {
+      if (kind === 'project') { await useListStore.getState().deleteList(id); await useTaskStore.getState().fetchTasks(); if (active === id) navigate('today'); }
+      else await useListStore.getState().deleteProjectGroup(id);
+    } catch { setError('删除失败，请重试。'); }
   };
-
-  const toggleGroupExpanded = (groupId: string) => {
-    setExpandedGroups((state) => ({
-      ...state,
-      [groupId]: state[groupId] === undefined ? false : !state[groupId],
-    }));
-  };
-
-  if (!isSidebarOpen) return null;
-
-  return (
-    <div className={cn('flex h-full w-72 flex-col border-r bg-background/95 backdrop-blur', className)}>
-      <div className="drag-region p-4">
-        <h1 className="no-drag text-xl font-bold">DoList</h1>
-      </div>
-
-      <div className="px-3 pb-2">
-        <Button variant="ghost" className="w-full justify-start text-muted-foreground" onClick={toggleSearch}>
-          <Search className="mr-2 h-4 w-4" />
-          搜索
-        </Button>
-      </div>
-
-      <ScrollArea className="flex-1">
-        <div className="px-3 py-2">
-          <div className="space-y-1">
-            {smartLists.map((item) => (
-              <Button
-                key={item.id}
-                variant={currentView === item.view ? 'secondary' : 'ghost'}
-                className="w-full justify-start"
-                onClick={() => {
-                  setCurrentView(item.view);
-                  setActiveList(item.id === 'inbox' ? 'inbox' : null);
-                }}
-              >
-                <item.icon className="mr-2 h-4 w-4" />
-                {item.label}
-              </Button>
-            ))}
-          </div>
-
-          <Separator className="my-4" />
-
-          <div>
-            <div className="mb-2 flex items-center justify-between group gap-1">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2 flex-1 justify-start"
-                onClick={() => setIsProjectGroupsExpanded((open) => !open)}
-              >
-                {isProjectGroupsExpanded ? (
-                  <ChevronDown className="mr-1 h-4 w-4" />
-                ) : (
-                  <ChevronRight className="mr-1 h-4 w-4" />
-                )}
-                <span className="text-sm font-medium">项目组</span>
-              </Button>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setIsCreatingGroup(true)}>
-                <Plus className="h-4 w-4" />
-              </Button>
-            </div>
-
-            {isProjectGroupsExpanded && (
-              <div className="ml-1 space-y-2">
-                {projectGroupsWithProjects.map((group) => {
-                  const isExpanded = expandedGroups[group.id] ?? true;
-                  const isActiveGroup = currentView === 'project-report' && activeProjectGroupId === group.id;
-
-                  return (
-                    <div key={group.id} className="rounded-xl border border-transparent bg-muted/20 p-1">
-                      <div className="group flex items-center gap-1">
-                        <Button
-                          variant={isActiveGroup ? 'secondary' : 'ghost'}
-                          className="h-8 flex-1 justify-start px-2"
-                          onClick={() => {
-                            setActiveProjectGroup(group.id === UNGROUPED_ID ? null : group.id);
-                            setCurrentView('project-report');
-                          }}
-                        >
-                          <span
-                            className="mr-2 h-2.5 w-2.5 rounded-full"
-                            style={{ backgroundColor: group.color || '#64748b' }}
-                          />
-                          <FolderTree className="mr-2 h-4 w-4" />
-                          <span className="truncate">{group.name}</span>
-                        </Button>
-
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
-                          onClick={() => toggleGroupExpanded(group.id)}
-                        >
-                          {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                        </Button>
-
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
-                          onClick={() => {
-                            setExpandedGroups((state) => ({ ...state, [group.id]: true }));
-                            setCreatingProjectForGroupId(group.id);
-                            setNewProjectName('');
-                          }}
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-
-                        {!group.isBuiltIn && (
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
-                              >
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              <DropdownMenuItem
-                                className="text-destructive focus:text-destructive"
-                                onClick={() => void deleteProjectGroup(group.id)}
-                              >
-                                <Trash2 className="mr-2 h-4 w-4" />
-                                删除项目组
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        )}
-                      </div>
-
-                      {isExpanded && (
-                        <div className="ml-4 mt-1 space-y-1 border-l border-border/60 pl-3">
-                          {group.projects.map((project) => (
-                            <div key={project.id} className="group/project flex items-center gap-1">
-                              <Button
-                                variant={activeListId === project.id && currentView === 'list' ? 'secondary' : 'ghost'}
-                                className="h-8 flex-1 justify-start px-2"
-                                onClick={() => {
-                                  setActiveProjectGroup(project.groupId);
-                                  setActiveList(project.id);
-                                  setCurrentView('list');
-                                }}
-                              >
-                                <FolderOpen className="mr-2 h-4 w-4" style={{ color: project.color || undefined }} />
-                                <span className="truncate">{project.name}</span>
-                              </Button>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 opacity-0 transition-opacity group-hover/project:opacity-100"
-                                  >
-                                    <MoreHorizontal className="h-4 w-4" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  <DropdownMenuItem
-                                    className="text-destructive focus:text-destructive"
-                                    onClick={() => void deleteList(project.id)}
-                                  >
-                                    <Trash2 className="mr-2 h-4 w-4" />
-                                    删除项目
-                                  </DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
-                          ))}
-
-                          {creatingProjectForGroupId === group.id && (
-                            <div className="flex items-center gap-2 py-1">
-                              <FolderOpen className="h-4 w-4 text-muted-foreground" />
-                              <Input
-                                value={newProjectName}
-                                onChange={(event) => setNewProjectName(event.target.value)}
-                                onBlur={() => void handleCreateProject()}
-                                onKeyDown={(event) => {
-                                  if (event.key === 'Enter') void handleCreateProject();
-                                  if (event.key === 'Escape') {
-                                    setCreatingProjectForGroupId(null);
-                                    setNewProjectName('');
-                                  }
-                                }}
-                                placeholder="项目名称"
-                                className="h-8"
-                                autoFocus
-                              />
-                            </div>
-                          )}
-
-                          {group.projects.length === 0 && creatingProjectForGroupId !== group.id && (
-                            <button
-                              type="button"
-                              className="h-8 w-full rounded-md px-2 text-left text-sm text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-                              onClick={() => {
-                                setCreatingProjectForGroupId(group.id);
-                                setNewProjectName('');
-                              }}
-                            >
-                              + 在这个项目组里创建项目
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-
-                {isCreatingGroup && (
-                  <div className="flex items-center gap-2 rounded-lg border bg-card px-2 py-2">
-                    <FolderTree className="h-4 w-4 text-muted-foreground" />
-                    <Input
-                      value={newGroupName}
-                      onChange={(event) => setNewGroupName(event.target.value)}
-                      onBlur={() => void handleCreateGroup()}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') void handleCreateGroup();
-                        if (event.key === 'Escape') {
-                          setIsCreatingGroup(false);
-                          setNewGroupName('');
-                        }
-                      }}
-                      placeholder="项目组名称"
-                      className="h-8"
-                      autoFocus
-                    />
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <Separator className="my-4" />
-
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 px-2 flex-1 justify-start"
-                onClick={() => setIsViewsExpanded((open) => !open)}
-              >
-                {isViewsExpanded ? (
-                  <ChevronDown className="mr-1 h-4 w-4" />
-                ) : (
-                  <ChevronRight className="mr-1 h-4 w-4" />
-                )}
-                <span className="text-sm font-medium">视图</span>
-              </Button>
-            </div>
-
-            {isViewsExpanded && (
-              <div className="ml-2 space-y-1">
-                {viewModes.map((item) => (
-                  <Button
-                    key={item.id}
-                    variant={currentView === item.view ? 'secondary' : 'ghost'}
-                    className="w-full justify-start"
-                    onClick={() => setCurrentView(item.view)}
-                  >
-                    <item.icon className="mr-2 h-4 w-4" />
-                    {item.label}
-                  </Button>
-                ))}
-              </div>
-            )}
-          </div>
+  if (!open) return null;
+  return <aside className="app-sidebar" aria-label="主导航">
+    <div className="sidebar-brand drag-region"><span className="brand-mark"><Check size={18} strokeWidth={3} /></span><span>DoList</span><span className="brand-caption">个人空间</span></div>
+    <button type="button" className="sidebar-search" onClick={() => useUIStore.getState().toggleSearch()}><Search size={16} /><span>搜索任务</span><kbd>Ctrl F</kbd></button>
+    <nav className="sidebar-scroll">
+      <div className="nav-section-caption">日常</div>
+      {([{ id: 'today', label: '今天', icon: Sun }, { id: 'inbox', label: '收件箱', icon: Inbox }, { id: 'upcoming', label: '计划', icon: CalendarDays }] as const).map(item => <button key={item.id} type="button" className={cn('nav-item', view === item.id && 'is-active')} aria-current={view === item.id ? 'page' : undefined} onClick={() => { useListStore.getState().setActiveList(null); navigate(item.id); }}><item.icon size={17} /><span>{item.label}</span>{item.id !== 'upcoming' && counts[item.id] > 0 && <span className="nav-count">{counts[item.id]}</span>}</button>)}
+      <div className="nav-section-caption mt-7"><span>项目</span><DropdownMenu><DropdownMenuTrigger asChild><button type="button" aria-label="新建项目或项目组"><Plus size={15} /></button></DropdownMenuTrigger><DropdownMenuContent align="start"><DropdownMenuItem onClick={() => beginCreate('project')}>新建项目</DropdownMenuItem><DropdownMenuItem onClick={() => beginCreate('group')}>新建项目组</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>
+      {listError && <p role="alert" className="p-2 text-xs text-destructive">{listError}<button className="ml-1 underline" onClick={() => void useListStore.getState().fetchLists()}>重新加载项目</button></p>}
+      {sections.map(group => <div key={group.id} className="project-group">
+        <div className="project-group-heading">
+          <button type="button" aria-expanded={expanded[group.id] !== false} onClick={() => setExpanded(s => ({ ...s, [group.id]: s[group.id] === false }))}>{expanded[group.id] === false ? <ChevronRight size={13} /> : <ChevronDown size={13} />}<span>{group.name}</span></button>
+          <DropdownMenu><DropdownMenuTrigger asChild><button type="button" aria-label={'管理项目组：' + group.name}><MoreHorizontal size={15} /></button></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onClick={() => beginCreate('project', group.id === '__ungrouped__' ? undefined : group.id)}>新建项目</DropdownMenuItem>{!['default-group', '__ungrouped__'].includes(group.id) && <DropdownMenuItem onClick={() => void remove('group', group.id, group.name)}>删除项目组</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div>
-      </ScrollArea>
-
-      <div className="space-y-1 border-t p-3">
-        <Button variant="ghost" className="w-full justify-start" onClick={togglePomodoro}>
-          <Timer className="mr-2 h-4 w-4" />
-          番茄钟
-        </Button>
-        <Button variant="ghost" className="w-full justify-start" onClick={toggleSettings}>
-          <Settings className="mr-2 h-4 w-4" />
-          设置
-        </Button>
-      </div>
-    </div>
-  );
+        {expanded[group.id] !== false && group.projects.map(project => <div key={project.id} className="project-nav-row"><button type="button" className={cn('nav-item', view === 'list' && active === project.id && 'is-active')} onClick={() => { useListStore.getState().setActiveList(project.id); navigate('list'); }}><Folder size={16} style={{ color: project.color ?? undefined }} /><span>{project.name}</span></button><DropdownMenu><DropdownMenuTrigger asChild><button type="button" className="project-menu" aria-label={'管理项目：' + project.name}><MoreHorizontal size={14} /></button></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem className="text-destructive" onClick={() => void remove('project', project.id, project.name)}><Trash2 size={14} className="mr-2" />删除项目</DropdownMenuItem></DropdownMenuContent></DropdownMenu></div>)}
+        {expanded[group.id] !== false && !group.projects.length && <button type="button" className="project-empty" onClick={() => beginCreate('project', group.id)}><Plus size={13} />添加一个项目</button>}
+      </div>)}
+      {creating && <form onSubmit={create} className="sidebar-create"><label className="text-xs">{creating.kind === 'group' ? '项目组名称' : '项目名称'}<input autoFocus value={name} disabled={busy} onChange={e => setName(e.target.value)} onKeyDown={e => { if (e.nativeEvent.isComposing && e.key === 'Enter') e.preventDefault(); }} /></label><div className="flex gap-2 mt-2"><Button size="sm" type="submit" disabled={busy || !name.trim()}>创建</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => setCreating(null)}>取消</Button></div></form>}
+      {error && <p role="alert" className="p-2 text-xs text-destructive">{error}</p>}
+      <button type="button" className="nav-section-caption mt-7 w-full" aria-expanded={more} onClick={() => setMore(!more)}><span>更多工具</span>{more ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</button>
+      {(more || ['matrix', 'project-report'].includes(view)) && <>{([{ id: 'matrix', label: '四象限', icon: Grid2X2 }, { id: 'project-report', label: '回顾', icon: BarChart3 }] as const).map(item => <button key={item.id} className={cn('nav-item', view === item.id && 'is-active')} onClick={() => navigate(item.id)}><item.icon size={16} /><span>{item.label}</span></button>)}</>}
+    </nav>
+    <div className="sidebar-footer"><button type="button" className={cn('nav-item', view === 'trash' && 'is-active')} aria-current={view === 'trash' ? 'page' : undefined} onClick={() => { useUIStore.getState().closeDetailPanel(); navigate('trash'); }}><Trash2 size={17} /><span>回收站</span></button><button type="button" className="nav-item" onClick={() => useUIStore.getState().togglePomodoro()}><Timer size={17} /><span>专注时刻</span><kbd>P</kbd></button><button type="button" className="nav-item" onClick={() => useUIStore.getState().toggleSettings()}><Settings size={17} /><span>设置</span></button><p className="sidebar-local"><span />本地保存 · 属于你的空间</p></div>
+  </aside>;
 }

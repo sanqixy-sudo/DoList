@@ -1,3 +1,5 @@
+import { PagedCollection } from '@/features/tasks/components/PagedCollection';
+import { useWorkspaceTasks } from '@/features/tasks/use-workspace-tasks';
 import { useEffect, useMemo, useState } from 'react';
 import {
   CalendarDays,
@@ -34,7 +36,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 import { useListStore } from '@/features/navigation/listStore';
 import { useUIStore } from '@/features/settings/uiStore';
-import { TaskContextMenu } from '@/features/tasks/components';
+import { TaskContextMenu } from '@/features/tasks/components/TaskContextMenu';
 import { useTaskStore } from '@/features/tasks/store';
 import type { Task } from '../../../../types/models';
 
@@ -62,7 +64,8 @@ const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
 function toDay(dateString: string | null): Date | null {
   if (!dateString) return null;
-  return startOfDay(parseISO(dateString));
+  const date = parseISO(dateString);
+  return Number.isFinite(date.getTime()) ? startOfDay(date) : null;
 }
 
 function formatTimelineDay(date: Date): string {
@@ -107,7 +110,7 @@ function getPeriodLabel(mode: ReportMode, anchorDate: Date) {
 }
 
 export function ProjectReportView() {
-  const { tasks } = useTaskStore();
+  const tasks = useWorkspaceTasks();
   const {
     lists,
     projectGroups,
@@ -183,7 +186,7 @@ export function ProjectReportView() {
     return date && isWithinInterval(date, period);
   }), [period, scopedTasks]);
 
-  const completionRate = createdTasks.length ? Math.round((completedTasks.length / createdTasks.length) * 100) : completedTasks.length > 0 ? 100 : 0;
+  const completionRate = createdTasks.length ? Math.round(createdTasks.filter(task => task.status === 'done').length / createdTasks.length * 100) : 0;
 
   const trendPoints = useMemo<TrendPoint[]>(() => {
     const points = eachDayOfInterval({ start: period.start, end: period.end }).map((date) => ({ date, created: 0, completed: 0 }));
@@ -248,8 +251,8 @@ export function ProjectReportView() {
   }, [period.end, period.start, selectedDayKey]);
 
   useEffect(() => {
-    if (mode === 'week') setSelectedDayKey(null);
-  }, [mode]);
+    setSelectedDayKey(null);
+  }, [mode, anchorDate]);
 
   if (projectGroups.length === 0 && projectLists.length === 0) {
     return (
@@ -284,14 +287,14 @@ export function ProjectReportView() {
             ))}
           </div>
 
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <div className="flex items-center rounded-lg border p-1">
               <Button variant={mode === 'week' ? 'default' : 'ghost'} size="sm" className="h-8" onClick={() => setMode('week')}>周报</Button>
               <Button variant={mode === 'month' ? 'default' : 'ghost'} size="sm" className="h-8" onClick={() => setMode('month')}>月报</Button>
             </div>
-            <Button variant="ghost" size="icon" onClick={() => setAnchorDate((d) => mode === 'week' ? subWeeks(d, 1) : subMonths(d, 1))}><ChevronLeft className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" aria-label="上一统计周期" onClick={() => setAnchorDate((d) => mode === 'week' ? subWeeks(d, 1) : subMonths(d, 1))}><ChevronLeft className="h-4 w-4" /></Button>
             <div className="min-w-[170px] text-center text-sm font-medium">{getPeriodLabel(mode, anchorDate)}</div>
-            <Button variant="ghost" size="icon" onClick={() => setAnchorDate((d) => mode === 'week' ? addWeeks(d, 1) : addMonths(d, 1))}><ChevronRight className="h-4 w-4" /></Button>
+            <Button variant="ghost" size="icon" aria-label="下一统计周期" onClick={() => setAnchorDate((d) => mode === 'week' ? addWeeks(d, 1) : addMonths(d, 1))}><ChevronRight className="h-4 w-4" /></Button>
           </div>
         </div>
 
@@ -313,7 +316,7 @@ export function ProjectReportView() {
         <SummaryCard icon={CheckCircle2} label="本期完成" value={completedTasks.length} iconClass="text-emerald-500" />
         <SummaryCard icon={ClipboardList} label="本期新增" value={createdTasks.length} iconClass="text-blue-500" />
         <SummaryCard icon={CalendarDays} label="本期到期" value={dueTasks.length} iconClass="text-amber-500" />
-        <SummaryCard icon={Target} label="完成率" value={`${completionRate}%`} helper={`项目数 ${visibleProjects.length}`} iconClass="text-violet-500" />
+        <SummaryCard icon={Target} label="本期新增完成率" value={`${completionRate}%`} helper="本期新增任务中，当前已完成的比例" iconClass="text-violet-500" />
       </div>
 
       <div className="grid gap-6 px-6 py-6 xl:grid-cols-[minmax(420px,1fr),minmax(320px,0.9fr)]">
@@ -346,24 +349,17 @@ export function ProjectReportView() {
             </div>
           ) : (
             <div className="mt-5">
-              <div className="mb-3 grid grid-cols-[auto,1fr] gap-3">
-                <div className="grid grid-rows-7 gap-2 text-[11px] text-muted-foreground">
-                  {WEEKDAY_LABELS.map((label) => <div key={label} className="flex h-[22px] items-center">{label}</div>)}
-                </div>
-                <div className="grid grid-cols-7 gap-1.5">
-                  {heatmapCells.map((cell) => {
-                    const key = format(cell.date, 'yyyy-MM-dd');
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        onClick={() => setSelectedDayKey((current) => current === key ? null : key)}
-                        className={cn('h-[22px] w-[22px] rounded-md transition-transform hover:scale-110', getHeatmapLevel(cell.score, maxHeatmapScore), selectedDayKey === key && 'scale-110 ring-2 ring-primary ring-offset-2 ring-offset-background')}
-                        title={`${format(cell.date, 'M月d日', { locale: zhCN })} · 新增 ${cell.created} / 完成 ${cell.completed}`}
-                      />
-                    );
-                  })}
-                </div>
+              <div className="report-heatmap mb-3 grid grid-cols-7 gap-1.5">
+                {WEEKDAY_LABELS.map(label => <div key={label} className="text-center text-xs text-muted-foreground">{label}</div>)}
+                {Array.from({ length: (period.start.getDay() + 6) % 7 }, (_, index) => <span key={'empty-' + index} aria-hidden="true" />)}
+                {heatmapCells.map(cell => {
+                  const key = format(cell.date, 'yyyy-MM-dd');
+                  const label = format(cell.date, 'M月d日 EEEE', { locale: zhCN }) + ' · 新增 ' + cell.created + ' / 完成 ' + cell.completed;
+                  return <button key={key} type="button" data-report-day={key} aria-label={label} aria-pressed={selectedDayKey === key}
+                    onClick={() => setSelectedDayKey(current => current === key ? null : key)}
+                    className={cn('h-8 rounded-md text-xs text-slate-950 transition-colors', getHeatmapLevel(cell.score, maxHeatmapScore), cell.score === 0 && 'text-foreground', selectedDayKey === key && 'ring-2 ring-primary ring-offset-1 ring-offset-background')}
+                    title={label}>{format(cell.date, 'd')}</button>;
+                })}
               </div>
               <div className="flex items-center justify-between text-xs text-muted-foreground">
                 <span>低活跃</span>
@@ -385,47 +381,15 @@ export function ProjectReportView() {
               {selectedDayKey && <Button variant="outline" size="sm" onClick={() => setSelectedDayKey(null)}>清除日期筛选</Button>}
             </div>
 
-            <ScrollArea className="min-h-0 flex-1 pr-3">
-              <div className="relative">
-                <div className="absolute bottom-0 left-[88px] top-0 w-px bg-border" />
-                {filteredDays.map((day) => {
-                  const key = format(day, 'yyyy-MM-dd');
-                  const dayEvents = eventsByDay.get(key) || [];
-                  return (
-                    <div key={key} className="relative mb-5 flex last:mb-0">
-                      <div className="w-[72px] pr-3 text-right">
-                        <button type="button" onClick={() => setSelectedDayKey(key)} className={cn('ml-auto block rounded-md px-2 py-1 text-sm font-medium transition-colors hover:bg-muted', isToday(day) && 'text-primary', selectedDayKey === key && 'bg-muted text-primary')}>
-                          {formatTimelineDay(day)}
-                        </button>
-                        <div className="text-xs text-muted-foreground">{format(day, 'EEE', { locale: zhCN })}</div>
-                      </div>
-                      <div className="relative w-8 shrink-0">
-                        <div className={cn('absolute left-[10px] top-2 z-10 h-3 w-3 rounded-full border-2 bg-background', dayEvents.length > 0 ? 'border-primary' : 'border-muted-foreground/30', isToday(day) && 'bg-primary')} />
-                      </div>
-                      <div className="min-h-[36px] flex-1 space-y-2.5">
-                        {dayEvents.length > 0 ? dayEvents.map((event) => (
-                          <TaskContextMenu key={event.id} task={event.task}>
-                            <div
-                              onClick={() => selectTask(event.taskId)}
-                              className={cn('cursor-pointer rounded-xl border p-3 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md', eventTypeClasses(event.type))}
-                            >
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <div className="text-xs font-medium uppercase tracking-wide opacity-80">{eventTypeLabel(event.type)}</div>
-                                  <div className="mt-1 text-sm font-medium">{event.title}</div>
-                                  {event.task.notes && <div className="mt-1.5 text-xs text-muted-foreground">{event.task.notes}</div>}
-                                </div>
-                                <div className="shrink-0 text-xs text-muted-foreground">{getTaskStatusLabel(event.task.status)}</div>
-                              </div>
-                            </div>
-                          </TaskContextMenu>
-                        )) : <div className="flex h-10 items-center text-sm text-muted-foreground/60">这一天没有项目事件。</div>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </ScrollArea>
+            <PagedCollection key={mode + anchorDate.toISOString() + selectedDayKey + selectedProject?.id + selectedGroupId} label="项目事件" items={selectedDayKey ? eventsByDay.get(selectedDayKey) ?? [] : events} renderItem={event => (
+              <TaskContextMenu task={event.task}>
+                <button className={cn('report-event w-full rounded-xl border p-3 text-left', eventTypeClasses(event.type))} onClick={() => selectTask(event.taskId)}>
+                  <span className="block text-xs opacity-80">{format(event.time, 'M月d日')} · {eventTypeLabel(event.type)} · {getTaskStatusLabel(event.task.status)}</span>
+                  <span className="mt-1 block break-words text-sm font-medium">{event.title}</span>
+                  {event.task.notes && <span className="mt-1 line-clamp-2 break-words text-xs text-muted-foreground">{event.task.notes}</span>}
+                </button>
+              </TaskContextMenu>
+            )} />
           </section>
         </div>
       </div>

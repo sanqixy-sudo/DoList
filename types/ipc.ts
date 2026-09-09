@@ -1,3 +1,5 @@
+import type { TaskUpdateResult, TaskBulkResult } from './task-mutations';
+import type { BackupPreview, BackupResult, BackupProgress } from './backup';
 import type {
   Task,
   List,
@@ -7,6 +9,7 @@ import type {
   ProjectGroup,
   CreateTaskDto,
   UpdateTaskDto,
+  BulkTaskUpdateDto,
   CreateTaskAttachmentDto,
   TaskAttachment,
   CreateListDto,
@@ -15,14 +18,28 @@ import type {
   CreateReminderDto,
 } from './models';
 
+export interface SaveStatus { pending: boolean; error: string | null }
+
 // IPC Channel names
 export const IPC_CHANNELS = {
+  BACKUP_CANCEL: 'backup:cancel',
+  BACKUP_PROGRESS: 'backup:progress',
+  BACKUP_GET_PROGRESS: 'backup:getProgress',
+  BACKUP_EXPORT: 'backup:export',
+  BACKUP_PREVIEW: 'backup:preview',
+  BACKUP_RESTORE: 'backup:restore',
   // Tasks
   TASKS_LIST: 'tasks:list',
   TASKS_GET: 'tasks:get',
   TASKS_CREATE: 'tasks:create',
   TASKS_UPDATE: 'tasks:update',
+  TASKS_UNDO: 'tasks:undo',
   TASKS_DELETE: 'tasks:delete',
+  TASKS_TRASH_LIST: 'tasks:trashList',
+  TASKS_TRASH: 'tasks:trash',
+  TASKS_RESTORE: 'tasks:restore',
+  TASKS_PURGE: 'tasks:purge',
+  TASKS_BULK_UPDATE: 'tasks:bulkUpdate',
   TASKS_SEARCH: 'tasks:search',
   TASKS_REORDER: 'tasks:reorder',
   TASKS_PICK_ATTACHMENTS: 'tasks:pickAttachments',
@@ -66,6 +83,9 @@ export const IPC_CHANNELS = {
   REMINDERS_DELETE: 'reminders:delete',
 
   // App
+  APP_SAVE_STATUS: 'app:saveStatus',
+  APP_FLUSH_DATABASE: 'app:flushDatabase',
+  APP_SAVE_STATUS_CHANGED: 'app:saveStatusChanged',
   APP_GET_VERSION: 'app:getVersion',
   APP_GET_THEME: 'app:getTheme',
   APP_SET_THEME: 'app:setTheme',
@@ -80,13 +100,20 @@ export const IPC_CHANNELS = {
 
 // IPC API interface exposed to renderer
 export interface ElectronAPI {
+  backup: { cancel: () => Promise<void>; getProgress: () => Promise<BackupProgress | null>; onProgress: (callback: (progress: BackupProgress | null) => void) => () => void; export: () => Promise<BackupResult | null>; preview: () => Promise<BackupPreview | null>; restore: (token: string) => Promise<{ safetyBackupPath: string }> };
   // Tasks
   tasks: {
     list: (filter?: TaskFilter) => Promise<Task[]>;
     get: (id: string) => Promise<Task | null>;
     create: (data: CreateTaskDto) => Promise<Task>;
-    update: (id: string, data: UpdateTaskDto) => Promise<Task>;
+    update: (id: string, data: UpdateTaskDto) => Promise<TaskUpdateResult>;
+    undo: (token: string) => Promise<Task[]>;
     delete: (id: string) => Promise<void>;
+    trashList: () => Promise<Task[]>;
+    trash: (ids: string[]) => Promise<void>;
+    restore: (ids: string[]) => Promise<Task[]>;
+    purge: (ids: string[]) => Promise<void>;
+    bulkUpdate: (ids: string[], data: BulkTaskUpdateDto) => Promise<TaskBulkResult>;
     search: (query: string) => Promise<Task[]>;
     reorder: (ids: string[]) => Promise<void>;
     pickAttachments: () => Promise<CreateTaskAttachmentDto[]>;
@@ -141,6 +168,11 @@ export interface ElectronAPI {
 
   // App
   app: {
+    scanAttachments: () => Promise<{ files: number; bytes: number; failed: number; skipped: number }>;
+    cleanupAttachments: () => Promise<{ files: number; bytes: number; failed: number; skipped: number }>;
+    getSaveStatus: () => Promise<SaveStatus>;
+    flushDatabase: () => Promise<void>;
+    onSaveStatus: (callback: (status: SaveStatus) => void) => () => void;
     getVersion: () => Promise<string>;
     getTheme: () => Promise<'light' | 'dark' | 'system'>;
     setTheme: (theme: 'light' | 'dark' | 'system') => Promise<void>;
@@ -150,6 +182,7 @@ export interface ElectronAPI {
     minimizeToTray: () => Promise<void>;
     quit: () => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    onResume: (callback: () => void) => () => void;
     onQuickAdd: (callback: () => void) => () => void;
   };
 }

@@ -1,5 +1,5 @@
 import { dbRun, dbGet, dbAll } from '../client';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID as uuidv4 } from 'node:crypto';
 import type { Tag } from '../../../../types/models';
 
 export const tagRepo = {
