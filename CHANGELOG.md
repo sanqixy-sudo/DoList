@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-NONE
+### Fixed
+
+- 粘贴图片只清理应用暂存目录中的直接子文件，保留外部附件原件。
 
 ## [1.0.2] - 2026-03-26
 
