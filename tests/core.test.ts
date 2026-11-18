@@ -22,6 +22,7 @@ import { subtaskRepo } from '../src/main/db/repositories/subtasks.repo';
 import { reminderRepo } from '../src/main/db/repositories/reminders.repo';
 import { tagRepo } from '../src/main/db/repositories/tags.repo';
 import { taskRepo } from '../src/main/db/repositories/tasks.repo';
+import { cleanupImportedSourcePath } from '../src/main/db/repositories/task-attachments.repo';
 import { localDay, selectScope, isTodayTask, needsReschedule } from '../src/renderer/features/tasks/task-selectors';
 import { buildCalendarIndex } from '../src/renderer/features/calendar/calendar-index';
 import { useTaskStore } from '../src/renderer/features/tasks/store';
@@ -93,6 +94,28 @@ test('过期加载不能覆盖较新的任务，修改串行保持输入顺序',
   assert.equal(useTaskStore.getState().tasks[0].title, '第二版');
 });
 after(() => { closeDatabase(); });
+
+test('粘贴图片清理只移除暂存目录直接创建的文件', t => {
+  const stage = path.join(path.dirname(dataPath), 'dolist-clipboard-attachments');
+  const external = fs.mkdtempSync(path.join(dataPath, 'kept-source-'));
+  fs.mkdirSync(stage, { recursive: true });
+  const direct = path.join(stage, path.basename(external) + '.png');
+  const link = path.join(stage, path.basename(external));
+  t.after(() => {
+    fs.rmSync(link, { force: true, recursive: true });
+    fs.rmSync(direct, { force: true });
+    fs.rmSync(external, { force: true, recursive: true });
+  });
+  const original = path.join(external, 'original.png');
+  fs.writeFileSync(original, '保留原文件');
+  fs.writeFileSync(direct, '临时剪贴板文件');
+  fs.symlinkSync(external, link, process.platform === 'win32' ? 'junction' : 'dir');
+  cleanupImportedSourcePath(direct);
+  cleanupImportedSourcePath(path.join(link, 'original.png'));
+  assert.equal(fs.existsSync(direct), false);
+  assert.equal(fs.readFileSync(original, 'utf8'), '保留原文件');
+});
+
 
 test('四象限仅调整重要性时保留已有截止时间', () => {
   const urgent = task({ dueDate: new Date(Date.now() + 3600000).toISOString() });

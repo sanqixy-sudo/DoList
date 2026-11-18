@@ -3,13 +3,14 @@ import { recordUndo, undoTaskChange } from '../db/repositories/task-undo';
 import { dbAll, dbGet } from '../db/client';
 import { mapRowToTask } from '../db/repositories/task-hydration';
 import { buildPlaceholders } from '../db/utils/task-logic';
-import { app, BrowserWindow, clipboard, nativeImage, dialog, shell } from 'electron';
+import { BrowserWindow, clipboard, nativeImage, dialog, shell } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import type { CreateTaskAttachmentDto, CreateTaskDto, UpdateTaskDto } from '../../../types/models';
 import { IPC_CHANNELS } from '../../../types/ipc';
 import type { TaskFilter } from '../../../types/ipc';
 import { taskRepo } from '../db/repositories';
+import { getClipboardAttachmentStagingDirectory } from '../db/repositories/task-attachments.repo';
 
 const selectedSources = new Set<string>();
 function requireAttachmentPath(filePath: string) {
@@ -101,13 +102,12 @@ export function registerTaskHandlers(): void {
     if (image.isEmpty()) return null;
     const pngBuffer = image.toPNG();
     const directory = getClipboardAttachmentStagingDirectory();
-    if (!fs.existsSync(directory)) {
-      fs.mkdirSync(directory, { recursive: true });
-    }
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    if (!fs.lstatSync(directory).isDirectory()) throw new Error('剪贴板附件临时目录无效');
 
     const fileName = `clipboard-image-${Date.now()}-${Math.random().toString(16).slice(2, 8)}.png`;
     const filePath = path.join(directory, fileName);
-    fs.writeFileSync(filePath, pngBuffer);
+    fs.writeFileSync(filePath, pngBuffer, { flag: 'wx', mode: 0o600 });
     selectedSources.add(path.resolve(filePath));
 
     return {
@@ -161,8 +161,4 @@ function inferMimeType(filePath: string): string | null {
   };
 
   return mimeByExtension[extension] ?? null;
-}
-
-function getClipboardAttachmentStagingDirectory(): string {
-  return path.join(app.getPath('temp'), 'dolist-clipboard-attachments');
 }

@@ -73,17 +73,20 @@ function ensureAttachmentDirectory(): void {
   }
 }
 
-function getClipboardAttachmentStagingDirectory(): string {
+export function getClipboardAttachmentStagingDirectory(): string {
   return path.join(app.getPath('temp'), 'dolist-clipboard-attachments');
 }
 
 export function cleanupImportedSourcePath(sourcePath: string): void {
   const stagingDirectory = getClipboardAttachmentStagingDirectory();
   const relativePath = path.relative(stagingDirectory, sourcePath);
-  const isStagedClipboardFile = relativePath !== '' && !relativePath.startsWith('..') && !path.isAbsolute(relativePath);
-
-  if (isStagedClipboardFile) {
-    removeAttachmentFile(sourcePath);
+  if (!relativePath || relativePath === '..' || path.basename(relativePath) !== relativePath) return;
+  try {
+    if (fs.lstatSync(stagingDirectory, { throwIfNoEntry: false })?.isDirectory()) {
+      removeAttachmentFile(sourcePath);
+    }
+  } catch (error) {
+    console.error('Failed to verify clipboard attachment staging directory:', error);
   }
 }
 
